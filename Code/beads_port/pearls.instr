@@ -7,8 +7,9 @@ freeze,latching,rising
 reset,momentary,rising
 source,latching,falling
 file,triggered,falling
-record,latching,rising
+record,momentary,rising
 ignoregate,freeze,reset
+ignorealtgate,reset,file
 eol,engine
 ui,pearls
 nebconfigend
@@ -19,8 +20,9 @@ nebconfigend
 ; processor (DSP by Emilie Gillet, MIT licence) to the Qu-Bit Nebulae v2.
 ;
 ; Requires the "pearls" Csound opcode (libpearls.so in the Csound plugin
-; directory), built and installed on the Nebulae by
-; QB_Nebulae_V2/Code/beads_port/install.sh. See Code/beads_port/README.md.
+; directory), installed by the Pearls firmware update or built on the
+; Nebulae by QB_Nebulae_V2/Code/beads_port/install.sh. See
+; Code/beads_port/README.md.
 ;
 ; Primary controls                  Beads equivalent
 ;   Start          (+CV)            TIME
@@ -35,25 +37,36 @@ nebconfigend
 ;   Reset button                    SEED (tap = grain; hold 1.5 s = re-lock)
 ;   Reset gate                      SEED input (clock/trigger grains)
 ;   Next button / gate              QUALITY: dirty tape, clean tape,
-;                                   vintage digital, digital
+;                                   vintage digital, digital (remembered)
 ;   Source button / gate            wavetable synth mode on/off
+;   Record button                   tap tempo: tap twice or more to clock
+;                                   the grains (or delay) at that tempo;
+;                                   hold 1 s to stop
 ;   EOL output                      grain / delay tap gate
 ;
 ; Secondary controls (hold Source)
 ;   Start / Size / Window / Pitch   TIME / SIZE / SHAPE / PITCH randomness
 ;   Density                         input gain: fully CCW = automatic
+;   Overlap                         reversed grains (probability)
+;   Blend                           stereo spread of the grains
 ;   Speed                           Nebulae input level (as usual)
 ;   Freeze                          randomness flavour: off = smooth
 ;                                   variations, on = sparse jumps
 ;   Record                          mono buffer (left input, twice as long)
+;   Next                            load the next WAV file from the USB
+;                                   stick into the buffer (held frozen
+;                                   until Freeze is released)
+;   Reset                           save the buffer to the USB stick
+;                                   (pearls_001.wav, pearls_002.wav...)
+;
+; A buffer frozen with the Freeze button for 3 seconds, and the quality
+; setting, are remembered across power cycles.
 ;
 ; Note: don't set "_alt" buttons in the config chunk above (e.g.
 ; "freeze_alt,latching,rising"): Nebulae reads "_alt" config lines as default
 ; values for secondary controls, and a non-numeric one crashed it (fixed in
 ; settings.py since). The default secondary button behaviours are used:
-; Freeze and Record latch.
-
-gkpearls_quality init 3
+; Freeze and Record latch, Next counts, Reset triggers.
 
 instr 1
 ainl, ainr inch 1, 2
@@ -64,16 +77,18 @@ kprevfile init 0
 ; Qu-Bit Instr Tester an incrementing file index. (No if/then: see README.)
 knext = limit(gkfilesel - kprevfile, 0, 1)
 kprevfile = gkfilesel
-gkpearls_quality = (gkpearls_quality + knext) % 4
 
-aL, aR, kgate, kseedled, kreserve pearls ainl, ainr, gkloopstart, gkloopsize, gkwindow, gkdensity, gkpitch, gkspeed, gkoverlap, gkblend, gkloopstart_alt, gkloopsize_alt, gkwindow_alt, gkpitch_alt, gkdensity_alt, gkfreeze, gkreset, gksource, gkpearls_quality, gkrecord_alt, gkfreeze_alt, 1
+aL, aR, kgate, kseedled, kreserve, kquality, kfrozen, kclock, kio pearls ainl, ainr, gkloopstart, gkloopsize, gkwindow, gkdensity, gkpitch, gkspeed, gkoverlap, gkblend, gkloopstart_alt, gkloopsize_alt, gkwindow_alt, gkpitch_alt, gkdensity_alt, gkoverlap_alt, gkblend_alt, gkfreeze, gkreset, gksource, knext, gkrecord_alt, gkfreeze_alt, gkrecord, gkfile_alt, gkreset_alt, 1, 1
 
 outs aL, aR
 
 ; Status for the Nebulae user interface.
-chnset gkpearls_quality, "pearls_quality"
+chnset kquality, "pearls_quality"
 chnset kseedled, "pearls_seedled"
 chnset kreserve, "pearls_reserve"
+chnset kfrozen, "pearls_frozen"
+chnset kclock, "pearls_clock"
+chnset kio, "pearls_io"
 gkeol = kgate
 gksizestatus = 0
 gkrecordstatus = 0

@@ -152,6 +152,92 @@ class Processor {
     }
   }
   
+  // Nebulae port: access to the recording buffer for loading and saving its
+  // contents, at buffer_sample_rate(). Delay 1 is the most recent frame.
+  inline float buffer_sample_rate() const {
+    return sample_rate() / float(ratio());
+  }
+
+  inline int buffer_duration() const {
+    switch (media_) {
+      case MEDIA_DIRTY_TAPE:
+        return processor_dirty_tape_.buffer_duration(mono_);
+      case MEDIA_CLEAN_TAPE:
+        return processor_clean_tape_.buffer_duration(mono_);
+      case MEDIA_VINTAGE_DIGITAL:
+        return processor_vintage_digital_.buffer_duration(mono_);
+      case MEDIA_DIGITAL:
+      default:
+        return processor_digital_.buffer_duration(mono_);
+    }
+  }
+
+  inline FloatFrame ReadBuffer(int delay) const {
+    switch (media_) {
+      case MEDIA_DIRTY_TAPE:
+        return processor_dirty_tape_.ReadBuffer(mono_, delay);
+      case MEDIA_CLEAN_TAPE:
+        return processor_clean_tape_.ReadBuffer(mono_, delay);
+      case MEDIA_VINTAGE_DIGITAL:
+        return processor_vintage_digital_.ReadBuffer(mono_, delay);
+      case MEDIA_DIGITAL:
+      default:
+        return processor_digital_.ReadBuffer(mono_, delay);
+    }
+  }
+
+  inline void WriteBuffer(FloatFrame frame) {
+    switch (media_) {
+      case MEDIA_DIRTY_TAPE:
+        processor_dirty_tape_.WriteBuffer(mono_, frame);
+        break;
+      case MEDIA_CLEAN_TAPE:
+        processor_clean_tape_.WriteBuffer(mono_, frame);
+        break;
+      case MEDIA_VINTAGE_DIGITAL:
+        processor_vintage_digital_.WriteBuffer(mono_, frame);
+        break;
+      case MEDIA_DIGITAL:
+      default:
+        processor_digital_.WriteBuffer(mono_, frame);
+        break;
+    }
+  }
+
+  // Empties the buffer (duration 0) without clearing the memory.
+  inline void TrimBuffer() {
+    switch (media_) {
+      case MEDIA_DIRTY_TAPE:
+        processor_dirty_tape_.Trim(mono_);
+        break;
+      case MEDIA_CLEAN_TAPE:
+        processor_clean_tape_.Trim(mono_);
+        break;
+      case MEDIA_VINTAGE_DIGITAL:
+        processor_vintage_digital_.Trim(mono_);
+        break;
+      case MEDIA_DIGITAL:
+      default:
+        processor_digital_.Trim(mono_);
+        break;
+    }
+  }
+
+  // Maximum number of frames the buffer holds in the current configuration.
+  inline int buffer_capacity() const {
+    switch (media_) {
+      case MEDIA_DIRTY_TAPE:
+        return processor_dirty_tape_.buffer_capacity(mono_);
+      case MEDIA_CLEAN_TAPE:
+        return processor_clean_tape_.buffer_capacity(mono_);
+      case MEDIA_VINTAGE_DIGITAL:
+        return processor_vintage_digital_.buffer_capacity(mono_);
+      case MEDIA_DIGITAL:
+      default:
+        return processor_digital_.buffer_capacity(mono_);
+    }
+  }
+
   // Nebulae port: optional sink receiving the per-sample grain/tap gate,
   // so the gate can drive a dedicated jack without using the right output.
   inline void set_gate_output(bool* gate_output) {

@@ -14,6 +14,11 @@ the Nebulae, instead of --opcode-lib. --csound runs another csound binary,
 e.g. an ARM one under emulation:
     --csound "qemu-arm -L /path/to/armhf-root /path/to/armhf-root/usr/bin/csound"
 
+The opcode's files live under a temporary $PEARLS_ROOT: the run loads a WAV
+file (secondary Next), saves the buffer to the "USB stick" (secondary Reset),
+and lets a frozen buffer be remembered. A second run then starts with silent
+input and checks that the quality setting and the frozen buffer come back.
+
 Exit status is non-zero if Csound fails or the output is silent/invalid.
 """
 
@@ -21,6 +26,7 @@ import argparse
 import math
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -44,6 +50,8 @@ TIMELINE = [
     (0.0, "gkblend", 0.8),
     (0.0, "gkloopstart_alt", 0.4),
     (0.0, "gkpitch_alt", 0.3),
+    (0.0, "gkoverlap_alt", 0.3),  # some reversed grains
+    (0.0, "gkblend_alt", 0.5),    # stereo spread
     (3.0, "gkfilesel", 1),       # Next: digital -> dirty tape
     (3.02, "gkfilesel", 0),
     (5.0, "gkfilesel", 1),       # Next: -> clean tape
@@ -53,8 +61,21 @@ TIMELINE = [
     (8.0, "gkloopsize", 1.0),    # delay mode
     (10.0, "gksource", 1),       # synth mode
     (12.0, "gksource", 0),
+    (12.5, "gkfile_alt", 1),     # secondary Next: load sample.wav, held
+    (13.5, "gkreset_alt", 1),    # secondary Reset: save to the USB stick
+    (13.52, "gkreset_alt", 0),
+    (14.0, "gkrecord", 1),       # tap tempo: 3 taps 0.5 s apart
+    (14.05, "gkrecord", 0),
+    (14.5, "gkrecord", 1),
+    (14.55, "gkrecord", 0),
+    (15.0, "gkrecord", 1),
+    (15.05, "gkrecord", 0),
 ]
-DURATION = 14.0
+DURATION = 18.0
+
+# Second run: a cold start with silent input.
+RESTORE_TIMELINE = [t for t in TIMELINE if t[0] == 0.0]
+RESTORE_DURATION = 4.0
 
 
 def parse_instr(path):
@@ -80,7 +101,7 @@ def nebulae_orc_header(conductor):
     return match.group(1)
 
 
-def write_input(path, seconds, sr=48000):
+def write_input(path, seconds, sr=48000, amplitude=0.4):
     with wave.open(path, "wb") as w:
         w.setnchannels(2)
         w.setsampwidth(2)
@@ -88,10 +109,28 @@ def write_input(path, seconds, sr=48000):
         frames = bytearray()
         for i in range(int(seconds * sr)):
             t = i / sr
-            l = 0.4 * math.sin(2 * math.pi * 220 * t) * (0.6 + 0.4 * math.sin(2 * math.pi * 0.5 * t))
-            r = 0.4 * math.sin(2 * math.pi * 330 * t)
+            l = amplitude * math.sin(2 * math.pi * 220 * t) * (0.6 + 0.4 * math.sin(2 * math.pi * 0.5 * t))
+            r = amplitude * math.sin(2 * math.pi * 330 * t)
             frames += struct.pack("<hh", int(l * 32767), int(r * 32767))
         w.writeframes(bytes(frames))
+
+
+def write_sample(path, seconds=1.5, sr=44100):
+    """The sample to load: a 44.1 kHz mono 1 kHz tone with a decay."""
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        frames = bytearray()
+        for i in range(int(seconds * sr)):
+            t = i / sr
+            frames += struct.pack("<h", int(0.5 * math.sin(2 * math.pi * 1000 * t) * math.exp(-t) * 32767))
+        w.writeframes(bytes(frames))
+
+
+def wav_info(path):
+    with wave.open(path, "rb") as w:
+        return w.getnchannels(), w.getframerate(), w.getnframes()
 
 
 def read_output(path):
@@ -101,6 +140,80 @@ def read_output(path):
     assert width == 2, "expected 16-bit output"
     samples = struct.unpack("<%dh" % (n * ch), data)
     return [s / 32768.0 for s in samples], ch, 48000
+
+
+def run_csound(args, config, instr, root, timeline, duration, amplitude, tag):
+    tmp = os.path.join(root, "run_" + tag)
+    os.makedirs(tmp)
+    out = args.out if (args.out and tag == "main") else os.path.join(tmp, "out.wav")
+    inp = os.path.join(tmp, "in.wav")
+    write_input(inp, duration + 1, amplitude=amplitude)
+
+    preamble = "ksmps = %s\nsr = %s\n" % (config.get("ksmps", ["128"])[0], config.get("sr", ["48000"])[0])
+    # One tiny instrument per timeline event, started from the score, so the
+    # driver needs no conditionals (if/then crashes the armhf Csound 6.10 of
+    # Ubuntu 18.04 under qemu).
+    if args.next_style == "increment":
+        # Instr Tester: Next increments the file index instead of pulsing.
+        original, timeline, index = timeline, [], 0
+        for t, chn, value in original:
+            if chn == "gkfilesel":
+                if value == 0:
+                    continue
+                index += 1
+                value = index
+            timeline.append((t, chn, value))
+    driver, events = [], []
+    for n, (t, chn, value) in enumerate(timeline):
+        driver.append("\ninstr %d\n%s init %s\nendin\n" % (100 + n, chn, value))
+        events.append("i%d %f 0.001\n" % (100 + n, t))
+    # Report the opcode's status twice a second.
+    driver.append('\ninstr 98\nkq chnget "pearls_quality"\nkf chnget "pearls_frozen"\n'
+                  'kc chnget "pearls_clock"\nki chnget "pearls_io"\n'
+                  'printks "PEARLS_STATUS %d %d %.1f %d\\n", 0.5, kq, kf, kc, ki\nendin\n')
+    header = nebulae_orc_header(args.conductor)
+    if args.no_chnexport:
+        header = re.sub(r"(gk\w+)\s+chnexport\s+\"\w+\",\s*\d", r"\1 init 0", header)
+    orc = preamble + header + "\nginumfiles init 0\n" + instr + "".join(driver)
+    sco = "".join(events) + "i1 0.01 %f\ni98 0.01 %f\n" % (duration, duration)
+
+    with open(os.path.join(tmp, "test.orc"), "w") as f:
+        f.write(orc)
+    with open(os.path.join(tmp, "test.sco"), "w") as f:
+        f.write(sco)
+
+    cmd = args.csound.split() + ["-d", "-m0", "-W", "-o", out, "-i", inp, "--nchnls_i=2"]
+    env = dict(os.environ)
+    env["PEARLS_ROOT"] = root
+    if args.plugin_dir:
+        env["OPCODE6DIR64"] = os.path.abspath(args.plugin_dir)
+    else:
+        cmd.append("--opcode-lib=" + args.lib)
+    for key in ("-b", "-B"):
+        if key in config:
+            cmd.append(key + config[key][0])
+    cmd += [os.path.join(tmp, "test.orc"), os.path.join(tmp, "test.sco")]
+    print(" ".join(cmd))
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    log = result.stdout + result.stderr
+    if result.returncode != 0 or "error" in log.lower() and "0 errors" not in log.lower():
+        print(log[-4000:])
+        print("FAIL: Csound returned %d" % result.returncode)
+        return None, None, log
+    samples, ch, sr = read_output(out)
+    status = [tuple(float(v) for v in m) for m in
+              re.findall(r"PEARLS_STATUS (\S+) (\S+) (\S+) (\S+)", log)]
+    for line in log.splitlines():
+        if line.startswith("pearls:"):
+            print("  " + line)
+    return (samples, ch, sr), status, out
+
+
+def rms(audio, t0, t1):
+    samples, ch, sr = audio
+    a, b = int(t0 * sr) * ch, int(t1 * sr) * ch
+    seg = samples[a:b]
+    return math.sqrt(sum(s * s for s in seg) / max(1, len(seg)))
 
 
 def main():
@@ -122,85 +235,80 @@ def main():
     args = parser.parse_args()
 
     config, instr = parse_instr(args.instr)
-    tmp = tempfile.mkdtemp(prefix="pearls_")
-    out = args.out or os.path.join(tmp, "out.wav")
-    inp = os.path.join(tmp, "in.wav")
-    write_input(inp, DURATION + 1)
+    root = tempfile.mkdtemp(prefix="pearls_")
+    print("PEARLS_ROOT=" + root)
+    os.makedirs(os.path.join(root, "home/alarm/audio"))
+    os.makedirs(os.path.join(root, "mnt/memory"))
+    write_sample(os.path.join(root, "home/alarm/audio/sample.wav"))
 
-    preamble = "ksmps = %s\nsr = %s\n" % (config.get("ksmps", ["128"])[0], config.get("sr", ["48000"])[0])
-    # One tiny instrument per timeline event, started from the score, so the
-    # driver needs no conditionals (if/then crashes the armhf Csound 6.10 of
-    # Ubuntu 18.04 under qemu).
-    timeline = TIMELINE
-    if args.next_style == "increment":
-        # Instr Tester: Next increments the file index instead of pulsing.
-        timeline, index = [], 0
-        for t, chn, value in TIMELINE:
-            if chn == "gkfilesel":
-                if value == 0:
-                    continue
-                index += 1
-                value = index
-            timeline.append((t, chn, value))
-    driver, events = [], []
-    for n, (t, chn, value) in enumerate(timeline):
-        driver.append("\ninstr %d\n%s init %s\nendin\n" % (100 + n, chn, value))
-        events.append("i%d %f 0.001\n" % (100 + n, t))
-    # Report the quality setting twice a second, to check that Next steps it.
-    driver.append('\ninstr 98\nprintks "PEARLS_QUALITY %d\\n", 0.5, gkpearls_quality\nendin\n')
-    header = nebulae_orc_header(args.conductor)
-    if args.no_chnexport:
-        header = re.sub(r"(gk\w+)\s+chnexport\s+\"\w+\",\s*\d", r"\1 init 0", header)
-    orc = preamble + header + "\nginumfiles init 0\n" + instr + "".join(driver)
-    sco = "".join(events) + "i1 0.01 %f\ni98 0.01 %f\n" % (DURATION, DURATION)
-
-    with open(os.path.join(tmp, "test.orc"), "w") as f:
-        f.write(orc)
-    with open(os.path.join(tmp, "test.sco"), "w") as f:
-        f.write(sco)
-
-    cmd = args.csound.split() + ["-d", "-m0", "-W", "-o", out, "-i", inp, "--nchnls_i=2"]
-    env = dict(os.environ)
-    if args.plugin_dir:
-        env["OPCODE6DIR64"] = os.path.abspath(args.plugin_dir)
-    else:
-        cmd.append("--opcode-lib=" + args.lib)
-    for key in ("-b", "-B"):
-        if key in config:
-            cmd.append(key + config[key][0])
-    cmd += [os.path.join(tmp, "test.orc"), os.path.join(tmp, "test.sco")]
-    print(" ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
-    log = result.stdout + result.stderr
-    if result.returncode != 0 or "error" in log.lower() and "0 errors" not in log.lower():
-        print(log[-4000:])
-        print("FAIL: Csound returned %d" % result.returncode)
+    audio, status, out = run_csound(args, config, instr, root, TIMELINE, DURATION, 0.4, "main")
+    if audio is None:
         return 1
-
-    samples, ch, sr = read_output(out)
     ok = True
+    def check(cond, message):
+        nonlocal ok
+        if not cond:
+            ok = False
+            print("  FAIL: " + message)
+
     # Next at 3 s and 5 s: digital (3) -> dirty tape (0) -> clean tape (1).
-    qualities = [int(q) for q in re.findall(r"PEARLS_QUALITY (\d+)", log)]
+    qualities = [int(q[0]) for q in status]
     steps = [q for i, q in enumerate(qualities) if i == 0 or q != qualities[i - 1]]
     print("  quality sequence: %s" % steps)
-    if steps != [3, 0, 1]:
-        ok = False
-        print("  FAIL: Next should step quality 3 -> 0 -> 1")
-    def rms(t0, t1):
-        a, b = int(t0 * sr) * ch, int(t1 * sr) * ch
-        seg = samples[a:b]
-        return math.sqrt(sum(s * s for s in seg) / max(1, len(seg)))
+    check(steps == [3, 0, 1], "Next should step quality 3 -> 0 -> 1")
     for label, t0, t1 in [("digital granular", 1.5, 3.0), ("dirty tape", 3.5, 5.0),
                           ("clean tape", 5.5, 6.0), ("frozen", 6.5, 8.0),
                           ("delay mode", 9.0, 10.0), ("synth", 10.5, 12.0),
-                          ("back to audio", 13.0, 14.0)]:
-        level = rms(t0, t1)
+                          ("loaded sample", 13.0, 14.0), ("tap tempo", 16.0, 18.0)]:
+        level = rms(audio, t0, t1)
         print("  %-18s rms %.3f" % (label, level))
-        if level < 0.01:
-            ok = False
-            print("  FAIL: %s is silent" % label)
+        check(level >= 0.01, "%s is silent" % label)
+
+    def status_at(t):
+        return status[min(int(t * 2), len(status) - 1)]
+    print("  status at 7 s %s, 13 s %s, 14 s %s, 17 s %s" % (
+        status_at(7.0), status_at(13.0), status_at(14.0), status_at(17.0)))
+    check(status_at(7.0)[1] == 1, "frozen at 7 s")
+    check(status_at(9.0)[1] == 0, "not frozen at 9 s")
+    check(any(st[3] == 2 for st in status[25:30]), "load reported (io = 2)")
+    check(status_at(13.0)[1] == 1, "held frozen after the load")
+    check(any(st[3] == 3 for st in status[27:32]), "save reported (io = 3)")
+    check(status_at(17.0)[2] > 0, "tap tempo clock running")
+    saved = os.path.join(root, "mnt/memory/pearls_001.wav")
+    check(os.path.exists(saved), "pearls_001.wav on the USB stick")
+    check(os.path.exists(os.path.join(root, "home/alarm/audio/pearls_001.wav")),
+          "pearls_001.wav in the audio folder")
+    if os.path.exists(saved):
+        info = wav_info(saved)
+        print("  saved WAV: %d channel(s), %d Hz, %d frames" % info)
+        # Clean tape (24 kHz), the 1.5 s sample.
+        check(info[1] == 24000 and abs(info[2] - 36000) < 10,
+              "saved WAV should hold the 1.5 s sample at 24 kHz")
+    state_file = os.path.join(root, "home/alarm/pearls/state.txt")
+    state = open(state_file).read().split() if os.path.exists(state_file) else []
+    print("  state.txt: %s" % " ".join(state))
+    check("quality" in state and state[state.index("quality") + 1] == "1",
+          "quality 1 remembered")
+    check("frozen" in state and state[state.index("frozen") + 1] == "1",
+          "frozen buffer remembered")
+    check(os.path.exists(os.path.join(root, "home/alarm/pearls/buffer.wav")),
+          "buffer.wav saved")
+
+    # Power cycle: silent input, nothing touched.
+    audio2, status2, _ = run_csound(args, config, instr, root, RESTORE_TIMELINE,
+                                    RESTORE_DURATION, 0.0, "restore")
+    if audio2 is None:
+        return 1
+    level = rms(audio2, 2.0, 4.0)
+    print("  after restart: status %s, rms %.3f (silent input)" % (status2[-1], level))
+    check(status2 and status2[0][0] == 1, "quality restored")
+    check(status2 and status2[-1][1] == 1, "buffer restored frozen")
+    check(level >= 0.01, "restored buffer plays")
+
     print("output: " + out)
     print("PASS" if ok else "FAIL")
+    if ok:
+        shutil.rmtree(root)
     return 0 if ok else 1
 
 

@@ -380,3 +380,42 @@ cd QB_Nebulae_V2/Code/beads_port/feasibility
 ./beads_bench check                          # output sanity check across targets
 CXX=arm-linux-gnueabihf-g++ EXTRA=-static ./build_bench.sh /path/to/eurorack   # cross build
 ```
+
+## 9. Expanded version (pearls5): how it was built
+
+This differs from the Phase 3 plan in section 5.4 in a few ways. The user
+guide is `README.md`.
+
+- **Buffer transfers.** Loading and saving go through new accessors on the
+  Beads recording buffer.
+  - Copying happens in the audio thread, 4096 frames per Csound control
+    period. That is about 0.2 ms of work on a Pi 3, and 50–200 ms for a full
+    buffer.
+  - The output is muted while loading.
+  - Saved buffers are 16-bit WAV files at the buffer's own rate, not raw
+    bytes. They work in any audio editor, and they load back losslessly: the
+    buffer holds 8-bit mu-law, 12-bit or 16-bit samples, all exact in 16-bit
+    PCM. Tests check this round trip.
+- **Threads.** The opcode starts two threads with Csound's `CreateThread`,
+  whose ABI is identical from Csound 6.08 to 6.18, rather than
+  `pthread_create`. A modern toolchain would bind `pthread_create` to a glibc
+  2.34 symbol that the Nebulae doesn't have.
+  - **File worker** (nice 10): reads and writes files and mounts the USB
+    stick. It hands jobs back and forth with the audio thread through one
+    atomic variable. No locks.
+  - **Gate poller** (SCHED_FIFO when allowed): reads the gate jacks every
+    0.2 ms. It timestamps edges for the audio thread and applies the EOL
+    edges the audio thread scheduled. `RenderClock` (`engine/gate_timing.h`)
+    turns timestamps into sample positions with a constant delay; a test
+    covers bursty rendering.
+- **Persistence.**
+  - The state is stored in `/home/alarm/pearls`. The root file system is
+    writable while Nebulae runs (`neb_globals.remount_fs = False`).
+  - Writes go to a temporary file, are synced, then renamed, so a power cut
+    leaves the previous copy.
+  - Timers count audio time, so offline renders test them too.
+- **Prebuilt compatibility.** The old `std::string` ABI keeps libstdc++ needs
+  at `GLIBCXX_3.4`. A private `__libc_single_threaded` replaces glibc 2.32's,
+  and the state file is parsed without `sscanf`, which glibc 2.38 headers
+  redirect to `__isoc23_sscanf`. `tools/build_prebuilt.sh` still rejects any
+  binary that needs more than glibc 2.17.

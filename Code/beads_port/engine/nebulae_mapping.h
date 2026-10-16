@@ -35,8 +35,11 @@
 //   Blend            DRY/WET
 //   Start/Size/Window/Pitch (secondary)   TIME/SIZE/SHAPE/PITCH randomness
 //   Density (secondary)                   input gain (0 = automatic)
+//   Overlap (secondary)                   reversed grains (Pearls addition)
+//   Blend (secondary)                     stereo spread (Pearls addition)
 //   Record (secondary)                    mono buffer
 //   Freeze (secondary)                    sparse randomness flavour
+//   Record                                tap tempo (Pearls addition)
 
 #ifndef PEARLS_ENGINE_NEBULAE_MAPPING_H_
 #define PEARLS_ENGINE_NEBULAE_MAPPING_H_
@@ -63,13 +66,16 @@ struct NebulaeControls {
   float window_alt;
   float pitch_alt;
   float density_alt;
+  float overlap_alt;
+  float blend_alt;
 
   bool freeze;        // freeze button (latched)
   bool reset;         // reset button (momentary) = seed button
   bool source;        // source button (latched) = synth mode
-  int quality;        // 0..3, counted by the orchestra from Next presses
+  int quality;        // 0..3, stepped by Next presses
   bool mono;          // secondary Record = mono buffer
   bool sparse;        // secondary Freeze = sparse randomness flavour
+  bool record;        // record button (momentary) = tap tempo
 };
 
 inline float Clamp01(float x) {
@@ -110,6 +116,13 @@ inline uint8_t GainFromKnob(float knob) {
   return uint8_t(1.0f + (k - 0.02f) / 0.98f * 254.0f);
 }
 
+// Secondary knobs for the Pearls additions: 0..1 with a small dead zone at
+// the counter-clockwise end, so that the default (0) is exactly "off".
+inline float AmountFromKnob(float knob) {
+  const float k = Clamp01(knob);
+  return k < 0.02f ? 0.0f : (k - 0.02f) / 0.98f;
+}
+
 inline void MapNebulaeControls(const NebulaeControls& n, Controls* c) {
   c->time = Clamp01(n.start);
   c->size = Clamp01(n.size);
@@ -125,12 +138,15 @@ inline void MapNebulaeControls(const NebulaeControls& n, Controls* c) {
   c->feedback = Clamp01(n.overlap);
   c->dry_wet = Clamp01(n.blend);
   c->reverb = ReverbFromNebulaeSpeed(n.speed);
+  c->reverse = AmountFromKnob(n.overlap_alt);
+  c->spread = AmountFromKnob(n.blend_alt);
 
   c->quality = std::min(std::max(n.quality, 0), int(QUALITY_LAST) - 1);
   c->mono = n.mono;
   c->synth = n.source;
   c->freeze = n.freeze;
   c->seed_button = n.reset;
+  c->tap = n.record;
   c->gain = GainFromKnob(n.density_alt);
 }
 

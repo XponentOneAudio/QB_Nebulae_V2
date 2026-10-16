@@ -49,7 +49,9 @@ class DelayGranularPlayer : public GranularPlayer<DelayGrain, 32> {
       FloatFrame* out) {
     if (trigger.trigger) {
       const float duration = p.size.value();
-      const bool reverse = duration < 0.3333333f;
+      const bool reverse = duration < 0.3333333f || (
+          p.reverse_probability > 0.0f &&
+          stmlib::Random::GetFloat() < p.reverse_probability);
 
       float amplitude, pan;
       ComputeGrainAmplitudeAndPan(trigger, p, &amplitude, &pan);

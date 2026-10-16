@@ -70,11 +70,17 @@ struct Controls {
   float dry_wet;       // 0..1
   float reverb;        // 0..1
 
+  // Pearls additions (0 = Beads behaviour).
+  float reverse;       // 0..1, probability of reversed grains
+  float spread;        // 0..1, extra random stereo spread of the grains
+
   int quality;         // Quality
   bool mono;           // Mono buffer (twice as long), left input only.
   bool synth;          // Wavetable synth mode instead of audio processing.
   bool freeze;         // Latched freeze button.
   bool seed_button;    // Momentary seed button (tap/hold, long press locks).
+  bool tap;            // Momentary tap tempo button (taps start a grain
+                       // clock, a 1 s press stops it).
   uint8_t gain;        // 0 = automatic gain control, 1..255 = manual.
 
   void SetDefaults();
@@ -88,6 +94,19 @@ struct Status {
   bool seed_input_patched;
   float overwrite_reserve;
   uint8_t vu_meter;
+
+  bool held;             // frozen after loading a buffer, until released
+  bool latched_frozen;   // frozen by the button or held (not by the gate)
+  bool clock_running;    // tap tempo clock
+  bool clock_led;        // tap tempo clock beat
+};
+
+// A buffer load or save (see Engine::StartLoad and Engine::StartSave).
+enum TransferState {
+  TRANSFER_IDLE,
+  TRANSFER_LOADING,
+  TRANSFER_SAVING,
+  TRANSFER_DONE
 };
 
 class Engine {
@@ -124,8 +143,38 @@ class Engine {
 
   const Status& status() const { return status_; }
 
+  // Buffer transfers. They run over several Process() calls, in chunks small
+  // enough for an audio thread; the arrays must stay valid until
+  // transfer_state() is TRANSFER_DONE (then call EndTransfer()).
+  //
+  // StartLoad fills the recording buffer with `frames` frames at
+  // `sample_rate`, converted to the rate of the current quality setting and
+  // truncated to the buffer length. The output is muted meanwhile. With
+  // `hold`, the buffer is then held frozen until the freeze button or gate
+  // is next released.
+  bool StartLoad(const float* l, const float* r, size_t frames,
+                 float sample_rate, bool hold);
+  // StartSave copies the buffer contents, oldest frame first, into arrays of
+  // at least `capacity` frames.
+  bool StartSave(float* l, float* r, size_t capacity);
+  TransferState transfer_state() const { return transfer_state_; }
+  void EndTransfer() { transfer_state_ = TRANSFER_IDLE; }
+  // Result of the last save.
+  size_t saved_frames() const { return transfer_frames_; }
+  float saved_sample_rate() const { return transfer_rate_; }
+  bool saved_mono() const { return transfer_mono_; }
+  // Buffer length (in frames) for any quality setting: the size of arrays
+  // that can hold every save.
+  static size_t MaxBufferFrames();
+
+  // Incremented whenever the buffer contents change (recording, loading,
+  // reconfiguration): tells hosts whether a saved copy is still current.
+  uint32_t buffer_generation() const { return buffer_generation_; }
+
  private:
   void RenderBlock();
+  void UpdateTapClock(bool* pulses);
+  void ContinueTransfer();
   void UpdateSeedButton(bool pressed);
   void UpdateConfiguration();
   void ApplyConfiguration();
@@ -197,6 +246,40 @@ class Engine {
 
   // Grain gate LED stretcher.
   size_t seed_led_time_;
+
+  // Held freeze (after a load) and freeze release detection.
+  bool hold_;
+  bool freeze_previous_;
+
+  // Tap tempo clock.
+  bool tap_previous_;
+  size_t tap_press_duration_;
+  size_t since_last_tap_;
+  float tap_intervals_[4];
+  size_t num_tap_intervals_;
+  bool clock_running_;
+  float clock_period_;
+  float clock_phase_;
+  size_t clock_pulse_remaining_;
+  size_t clock_led_time_;
+
+  // Buffer transfer.
+  TransferState transfer_state_;
+  const float* load_l_;
+  const float* load_r_;
+  float* save_l_;
+  float* save_r_;
+  size_t transfer_source_frames_;
+  float transfer_source_rate_;
+  bool transfer_hold_;
+  bool transfer_started_;
+  double transfer_position_;
+  size_t transfer_frames_;
+  size_t transfer_target_frames_;
+  float transfer_rate_;
+  bool transfer_mono_;
+  int transfer_write_ptr_;
+  uint32_t buffer_generation_;
 
   DISALLOW_COPY_AND_ASSIGN(Engine);
 };

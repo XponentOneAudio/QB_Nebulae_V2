@@ -49,6 +49,19 @@ const float kFadeOutTime = 0.01f;           // s, before reconfiguring
 const float kFadeInTime = 0.05f;            // s, after reconfiguring
 const float kSeedLedTime = 0.04f;           // s
 
+// Tap tempo: taps more than kTapTimeout apart start a new measurement, an
+// interval more than 30% away from the average restarts the average, and a
+// press of kTapStopTime stops the clock.
+const float kTapTimeout = 4.0f;             // s
+const float kMinTapInterval = 0.05f;        // s
+const float kTapStopTime = 1.0f;            // s
+const float kClockPulseTime = 0.005f;       // s
+const float kClockLedTime = 0.05f;          // s
+
+// Frames copied to or from the buffer per Process() call: about 0.2 ms of
+// work on a Raspberry Pi 3.
+const size_t kTransferChunk = 4096;
+
 // Input presence detection, replacing the Beads normalisation probe: input
 // is considered unpatched after 2 s below -66 dBFS, and patched again as soon
 // as the level exceeds -60 dBFS.
@@ -87,12 +100,20 @@ void Controls::SetDefaults() {
   feedback = 0.0f;
   dry_wet = 0.5f;
   reverb = 0.0f;
+  reverse = 0.0f;
+  spread = 0.0f;
   quality = QUALITY_DIGITAL;
   mono = false;
   synth = false;
   freeze = false;
   seed_button = false;
+  tap = false;
   gain = 0;
+}
+
+size_t Engine::MaxBufferFrames() {
+  // The longest buffer: 8-bit mono (dirty tape).
+  return kDelayBufferSizeBits / 8;
 }
 
 Engine::~Engine() {
@@ -163,7 +184,231 @@ bool Engine::Init() {
   seed_led_time_ = 0;
   status_.seed_locked = true;
   status_.overwrite_reserve = 1.0f;
+
+  hold_ = false;
+  freeze_previous_ = false;
+
+  tap_previous_ = false;
+  tap_press_duration_ = 0;
+  since_last_tap_ = Seconds(kTapTimeout);
+  num_tap_intervals_ = 0;
+  clock_running_ = false;
+  clock_period_ = 0.0f;
+  clock_phase_ = 0.0f;
+  clock_pulse_remaining_ = 0;
+  clock_led_time_ = 0;
+
+  transfer_state_ = TRANSFER_IDLE;
+  load_l_ = load_r_ = NULL;
+  save_l_ = save_r_ = NULL;
+  transfer_source_frames_ = 0;
+  transfer_source_rate_ = float(kSampleRate);
+  transfer_hold_ = false;
+  transfer_started_ = false;
+  transfer_position_ = 0.0;
+  transfer_frames_ = 0;
+  transfer_target_frames_ = 0;
+  transfer_rate_ = float(kSampleRate);
+  transfer_mono_ = false;
+  transfer_write_ptr_ = 0;
+  buffer_generation_ = 0;
   return true;
+}
+
+bool Engine::StartLoad(
+    const float* l,
+    const float* r,
+    size_t frames,
+    float sample_rate,
+    bool hold) {
+  if (transfer_state_ != TRANSFER_IDLE || !l || !r || !frames ||
+      sample_rate < 1000.0f) {
+    return false;
+  }
+  load_l_ = l;
+  load_r_ = r;
+  transfer_source_frames_ = frames;
+  transfer_source_rate_ = sample_rate;
+  transfer_hold_ = hold;
+  transfer_started_ = false;
+  transfer_state_ = TRANSFER_LOADING;
+  return true;
+}
+
+bool Engine::StartSave(float* l, float* r, size_t capacity) {
+  if (transfer_state_ != TRANSFER_IDLE || !l || !r) {
+    return false;
+  }
+  save_l_ = l;
+  save_r_ = r;
+  transfer_target_frames_ = capacity;
+  transfer_frames_ = 0;
+  transfer_started_ = false;
+  transfer_state_ = TRANSFER_SAVING;
+  return true;
+}
+
+void Engine::ContinueTransfer() {
+  if (transfer_state_ == TRANSFER_LOADING) {
+    // Wait for the output to be muted and the configuration to be stable:
+    // reconfiguring clears the buffer.
+    if (reconfigure_pending_ || fade_ > 0.0f) {
+      return;
+    }
+    const float rate = processor_->buffer_sample_rate();
+    const double step = double(transfer_source_rate_) / double(rate);
+    if (!transfer_started_) {
+      processor_->TrimBuffer();
+      transfer_rate_ = rate;
+      transfer_mono_ = processor_->mono();
+      transfer_frames_ = 0;
+      // Leave room for the interpolation tail: a full buffer would wrap.
+      const size_t capacity = size_t(processor_->buffer_capacity()) - 8;
+      const size_t converted = size_t(
+          double(transfer_source_frames_ - 1) / step) + 1;
+      transfer_target_frames_ = min(capacity, converted);
+      transfer_started_ = true;
+    }
+    const size_t end = min(
+        transfer_target_frames_, transfer_frames_ + kTransferChunk);
+    const size_t last = transfer_source_frames_ - 1;
+    for (; transfer_frames_ < end; ++transfer_frames_) {
+      const double position = double(transfer_frames_) * step;
+      const size_t i = min(size_t(position), last);
+      FloatFrame frame;
+      if (step > 1.0) {
+        // Downsampling: average the source frames this frame covers.
+        const size_t j = min(
+            max(size_t(position + step), i + 1), last + 1);
+        float l = 0.0f, r = 0.0f;
+        for (size_t k = i; k < j; ++k) {
+          l += load_l_[k];
+          r += load_r_[k];
+        }
+        frame.l = l / float(j - i);
+        frame.r = r / float(j - i);
+      } else {
+        // Upsampling: linear interpolation.
+        const size_t next = min(i + 1, last);
+        const float t = float(position - double(i));
+        frame.l = load_l_[i] + (load_l_[next] - load_l_[i]) * t;
+        frame.r = load_r_[i] + (load_r_[next] - load_r_[i]) * t;
+      }
+      CONSTRAIN(frame.l, -1.0f, 1.0f);
+      CONSTRAIN(frame.r, -1.0f, 1.0f);
+      processor_->WriteBuffer(frame);
+    }
+    if (transfer_frames_ >= transfer_target_frames_) {
+      hold_ = transfer_hold_;
+      // A freeze already engaged releases the hold when it is released.
+      freeze_previous_ = controls_.freeze;
+      ++buffer_generation_;
+      transfer_state_ = TRANSFER_DONE;
+    }
+  } else if (transfer_state_ == TRANSFER_SAVING) {
+    const int capacity = processor_->buffer_capacity();
+    const int write_ptr = *processor_->mutable_delay_write_ptr();
+    if (!transfer_started_) {
+      transfer_rate_ = processor_->buffer_sample_rate();
+      transfer_mono_ = processor_->mono();
+      transfer_target_frames_ = min(
+          transfer_target_frames_, size_t(processor_->buffer_duration()));
+      transfer_write_ptr_ = write_ptr;
+      transfer_frames_ = 0;
+      transfer_started_ = true;
+    }
+    // Frames recorded since the save started shift the delays.
+    const int written = (transfer_write_ptr_ - write_ptr + capacity) %
+        capacity;
+    const size_t end = min(
+        transfer_target_frames_, transfer_frames_ + kTransferChunk);
+    for (; transfer_frames_ < end; ++transfer_frames_) {
+      int delay = int(transfer_target_frames_ - transfer_frames_) + written;
+      if (delay > capacity) {
+        delay = capacity;
+      }
+      const FloatFrame frame = processor_->ReadBuffer(delay);
+      save_l_[transfer_frames_] = frame.l;
+      save_r_[transfer_frames_] = frame.r;
+    }
+    if (transfer_frames_ >= transfer_target_frames_) {
+      transfer_state_ = TRANSFER_DONE;
+    }
+  }
+}
+
+void Engine::UpdateTapClock(bool* pulses) {
+  const bool tap = controls_.tap;
+  if (tap && !tap_previous_) {
+    tap_press_duration_ = 0;
+    if (since_last_tap_ < Seconds(kTapTimeout)) {
+      const float interval = float(since_last_tap_);
+      if (interval >= float(Seconds(kMinTapInterval))) {
+        float average = 0.0f;
+        for (size_t i = 0; i < num_tap_intervals_; ++i) {
+          average += tap_intervals_[i];
+        }
+        if (num_tap_intervals_) {
+          average /= float(num_tap_intervals_);
+          if (fabsf(interval - average) > 0.3f * average) {
+            num_tap_intervals_ = 0;
+          }
+        }
+        if (num_tap_intervals_ == 4) {
+          copy(&tap_intervals_[1], &tap_intervals_[4], &tap_intervals_[0]);
+          --num_tap_intervals_;
+        }
+        tap_intervals_[num_tap_intervals_++] = interval;
+        average = 0.0f;
+        for (size_t i = 0; i < num_tap_intervals_; ++i) {
+          average += tap_intervals_[i];
+        }
+        clock_period_ = average / float(num_tap_intervals_);
+        clock_running_ = true;
+        clock_phase_ = 0.0f;
+      }
+    } else if (clock_running_) {
+      // A single tap re-aligns the beat.
+      clock_phase_ = 0.0f;
+    }
+    since_last_tap_ = 0;
+  }
+  if (tap) {
+    tap_press_duration_ += kBlockSize;
+    if (tap_press_duration_ >= Seconds(kTapStopTime)) {
+      clock_running_ = false;
+      num_tap_intervals_ = 0;
+      since_last_tap_ = Seconds(kTapTimeout);
+    }
+  }
+  tap_previous_ = tap;
+  if (since_last_tap_ < Seconds(kTapTimeout)) {
+    since_last_tap_ += kBlockSize;
+  }
+
+  const size_t pulse_length = min(
+      Seconds(kClockPulseTime), size_t(clock_period_ * 0.5f));
+  for (size_t i = 0; i < kBlockSize; ++i) {
+    if (clock_running_) {
+      if (clock_phase_ <= 0.0f) {
+        clock_phase_ += clock_period_;
+        clock_pulse_remaining_ = pulse_length;
+        clock_led_time_ = Seconds(kClockLedTime);
+      }
+      clock_phase_ -= 1.0f;
+    }
+    pulses[i] = clock_pulse_remaining_ > 0;
+    if (clock_pulse_remaining_) {
+      --clock_pulse_remaining_;
+    }
+  }
+  if (!clock_running_) {
+    clock_led_time_ = 0;
+  } else if (clock_led_time_ > kBlockSize) {
+    clock_led_time_ -= kBlockSize;
+  } else {
+    clock_led_time_ = 0;
+  }
 }
 
 void Engine::Process(
@@ -177,6 +422,7 @@ void Engine::Process(
     uint8_t* gate_out,
     size_t size) {
   controls_ = controls;
+  ContinueTransfer();
   for (size_t i = 0; i < size; ++i) {
     out_l[i] = out_fifo_l_[fifo_index_];
     out_r[i] = out_fifo_r_[fifo_index_];
@@ -237,12 +483,15 @@ void Engine::UpdateConfiguration() {
     reconfigure_pending_ = false;
   }
 
-  if (reconfigure_pending_) {
+  if (reconfigure_pending_ || transfer_state_ == TRANSFER_LOADING) {
+    // Mute while reconfiguring or loading the buffer.
     fade_ -= float(kBlockSize) / (kFadeOutTime * kSampleRate);
     if (fade_ <= 0.0f) {
       fade_ = 0.0f;
-      ApplyConfiguration();
-      reconfigure_pending_ = false;
+      if (reconfigure_pending_) {
+        ApplyConfiguration();
+        reconfigure_pending_ = false;
+      }
     }
   } else {
     fade_ += float(kBlockSize) / (kFadeInTime * kSampleRate);
@@ -265,6 +514,10 @@ void Engine::ApplyConfiguration() {
       reset_gain_pending_);
   reset_gain_pending_ = false;
   seed_flags_previous_32k_ = GATE_FLAG_LOW;
+  // The processor cleared its buffer: start transfers again.
+  transfer_started_ = false;
+  hold_ = false;
+  ++buffer_generation_;
 }
 
 void Engine::DetectInput(const FloatFrame* in, size_t size) {
@@ -326,6 +579,11 @@ void Engine::BuildParameters(
   CONSTRAIN(m->dry_wet, 0.0f, 1.0f);
   CONSTRAIN(m->reverb_amount, 0.0f, 1.0f);
   m->output_gate = false;
+
+  p->reverse_probability = c.reverse;
+  p->stereo_spread = c.spread;
+  CONSTRAIN(p->reverse_probability, 0.0f, 1.0f);
+  CONSTRAIN(p->stereo_spread, 0.0f, 1.0f);
 }
 
 void Engine::ProcessAudio(
@@ -406,21 +664,43 @@ void Engine::RenderBlock() {
   GateFlags seed[kBlockSize];
   bool gate[kBlockSize];
 
+  // Freeze: button, gate, held after a load (until the button or gate is
+  // released), and always while loading so that the input is not recorded
+  // over the loaded frames.
+  bool freeze_gate_block = false;
+  for (size_t i = 0; i < kBlockSize; ++i) {
+    freeze_gate_block = freeze_gate_block || freeze_fifo_[i];
+  }
+  const bool freeze_now = controls_.freeze || freeze_gate_block;
+  if (hold_ && freeze_previous_ && !freeze_now) {
+    hold_ = false;
+  }
+  freeze_previous_ = freeze_now;
+  const bool loading = transfer_state_ == TRANSFER_LOADING;
+
   bool freeze_block = false;
+  bool recorded = false;
   for (size_t i = 0; i < kBlockSize; ++i) {
     in[i].l = in_fifo_l_[i];
     in[i].r = in_fifo_r_[i];
-    freeze[i] = controls_.freeze || freeze_fifo_[i];
+    freeze[i] = controls_.freeze || hold_ || loading || freeze_fifo_[i];
     freeze_block = freeze_block || freeze[i];
+    recorded = recorded || !freeze[i];
     gate[i] = false;
   }
+  if (recorded && !synth_mode_) {
+    ++buffer_generation_;
+  }
+
+  bool clock[kBlockSize];
+  UpdateTapClock(clock);
 
   // Seed gate. Beads only uses its seed input when a cable is plugged in;
   // here, an edge marks the input as patched until it stays idle for a while.
   // As on Beads, the gate is delayed by 2.5 ms so that a CV changing at the
   // same time as the trigger is taken into account.
   for (size_t i = 0; i < kBlockSize; ++i) {
-    const bool g = seed_fifo_[i];
+    const bool g = seed_fifo_[i] || clock[i];
     if (g) {
       if (!seed_gate_previous_) {
         status_.seed_input_patched = true;
@@ -497,6 +777,10 @@ void Engine::RenderBlock() {
   status_.seed_locked = seed_locked_;
   status_.seed_led = seed_led_time_ > 0;
   status_.frozen = freeze_block;
+  status_.held = hold_;
+  status_.latched_frozen = controls_.freeze || hold_;
+  status_.clock_running = clock_running_;
+  status_.clock_led = clock_led_time_ > 0;
   status_.overwrite_reserve = synth_mode_
       ? 1.0f
       : processor_->overwrite_reserve();

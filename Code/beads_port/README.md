@@ -5,16 +5,23 @@ Beads** granular processor to the **Qu-Bit Nebulae v2**. It is made for
 personal use and for sharing in the spirit of open source.
 
 The audio code is Emilie Gillet's original Beads DSP (MIT licence), unchanged
-apart from two small hooks. Around it, a new engine stands in for the Beads
+apart from a few small hooks (listed in `third_party/eurorack/UPSTREAM.md`). Around it, a new engine stands in for the Beads
 hardware, a Csound plugin opcode runs it, and a Nebulae instrument file maps
 the panel. The upstream README asks derivative works not to use the original
 name, hence "Pearls".
 
-> **Status: working on hardware.** Firmware `v2_1_2-pearls4` installs from a USB
-> stick and runs Pearls on a Nebulae v2 (Raspberry Pi 3, Csound 6.11). That was
-> confirmed in a first round of hands-on testing; longer testing is under way.
-> Behind it: engine tests (desktop and ARM), Csound harnesses (including an
-> emulated 2018 ARM Csound), and a simulator of the Nebulae Python program.
+> **Status: working on hardware; new features untested on hardware.**
+> Firmware `v2_1_2-pearls4` installs from a USB stick and runs Pearls on a
+> Nebulae v2 (Raspberry Pi 3, Csound 6.11), confirmed in hands-on testing.
+> `v2_1_2-pearls5` adds:
+> - loading samples from the USB stick and saving the buffer to it;
+> - memory across power cycles;
+> - tap tempo, reversed grains and stereo spread;
+> - tighter gate timing.
+>
+> These new features have passed the desktop tests but not yet a hands-on test.
+> The tests cover the engine (desktop and ARM), Csound (including an emulated
+> 2018 ARM Csound), and a simulator of the Nebulae Python program.
 
 ## What you get
 
@@ -25,6 +32,15 @@ name, hence "Pearls".
 - Grain gates on the Nebulae EOL output, with stereo audio kept.
 - Separate CV for feedback, dry/wet and reverb (Beads has one assignable CV
   for these).
+
+Pearls additions, beyond Beads:
+- **Samples:** load WAV files from the USB stick into the buffer, and save
+  the buffer to the stick as a WAV file.
+- **Memory:** the quality setting and a frozen buffer survive power cycles.
+- **Tap tempo** on the Record button: an internal clock for the grains (or
+  the delay), as if a clock were patched into the seed input.
+- **Reversed grains** and **stereo spread** on the free secondary knobs.
+- **Tighter gate timing** on the Freeze and Reset gates and the EOL output.
 
 ## Panel
 
@@ -44,8 +60,11 @@ name, hence "Pearls".
 | **Reset** gate | SEED input: triggers or clocks grains. Seen as patched while it receives edges (4 s timeout) |
 | **Next** button / gate | QUALITY: dirty tape → clean tape → vintage digital → digital. The encoder LEDs show the Beads colour for 1.5 s |
 | **Source** button / gate | Wavetable synth mode on/off |
+| **Record** button | TAP TEMPO: tap two or more times to clock the grains (or the delay) at that tempo; a single tap later re-aligns the beat; hold 1 s to stop |
 | **EOL** output | Grain / delay-tap gate |
 | **Reset** LED | Grain activity (dim while locked and idle) |
+| **Freeze** LED | Buffer frozen (by the button, the gate, or held after loading) |
+| **Record** LED | Tap tempo beat (dim between beats) |
 
 **Secondary layer** (hold Source, as for other Nebulae instruments):
 
@@ -54,13 +73,68 @@ name, hence "Pearls".
 | Start / Size / Window | TIME / SIZE / SHAPE randomness (fully CCW = none) |
 | Pitch encoder | PITCH randomness |
 | Density | Input gain: fully CCW = automatic (default), otherwise 1×–40× manual |
+| Overlap | Reversed grains: fully CCW = as Beads (only very short grains play backwards), clockwise = more and more grains play backwards, all of them fully clockwise |
+| Blend | Stereo spread: fully CCW = as Beads, clockwise = grains spread further across the stereo field |
 | Speed encoder | Nebulae input level (unchanged) |
 | Freeze | Randomness flavour: off = smooth variations, on = sparse jumps |
 | Record | Mono buffer: left input only, twice the recording time |
+| Next | Load the next WAV file from the USB stick into the buffer |
+| Reset | Save the buffer to the USB stick |
 
-The Record button is not used in the primary layer. Holding it still gives
-the usual Nebulae edit combos, such as Record + Source for the instrument
-selector.
+With a tap tempo clock, Density works as with a clock in the Reset gate.
+Clockwise of 12 o'clock it sets the chance of a grain on each beat (every
+beat when fully clockwise). Counter-clockwise it divides the clock.
+
+Reversed grains and stereo spread act on grains, not on the delay mode's
+taps.
+
+## Samples, saving and memory
+
+**Loading a sample.** Hold Source and press Next. Pearls loads the next WAV
+file from the USB stick into its buffer. It goes through the files in
+alphabetical order, one per press, and wraps around after the last.
+- The Nebulae copies the stick's audio files into `/home/alarm/audio` at
+  boot, and Pearls reads that copy. With no files there, it reads the stick
+  directly.
+- Any WAV file works: 8, 16, 24 or 32-bit, or floating point, at any sample
+  rate, mono or stereo. Only the first two channels of a multichannel file
+  are used.
+- The sample is converted to the rate of the current quality setting:
+  - 48 kHz in digital;
+  - 32 kHz in vintage digital;
+  - 24 kHz in the tape modes.
+- The sample is cut to the buffer length:
+  - about 4 s in digital stereo;
+  - up to about 32 s in dirty tape mono.
+- The loaded buffer is **held frozen** so the input doesn't overwrite it. To
+  start recording again, press Freeze twice (on, then off). Or, if Freeze
+  was already on, press it once. A high-then-low Freeze gate does the same.
+- Changing the quality setting or the mono setting clears the buffer, as on
+  Beads. Choose them before loading.
+
+**Saving the buffer.** Hold Source and press Reset. Pearls writes the buffer
+to the stick as `pearls_001.wav`, `pearls_002.wav` and so on. These are
+16-bit WAV files at the buffer's own rate, mono if the buffer is mono. It
+also keeps a copy in `/home/alarm/audio`, so you can load the file again
+straight away. Leave the stick in while saving.
+
+**Feedback.** While a file loads or saves, the Next LED blinks. Then the
+encoder LEDs flash for 1.5 s:
+- **green:** loaded;
+- **blue:** saved;
+- **red:** failed (no WAV files, no stick, unreadable file, or an empty
+  buffer).
+
+**Memory.**
+- **Quality:** remembered, saved 2 s after the last change.
+- **Frozen buffer:** saved after it has stayed frozen by the Freeze button
+  (or held after a load) for 3 s. At the next start it comes back held
+  frozen. Unfreeze it and the next start begins with an empty buffer.
+
+Pearls keeps these in `/home/alarm/pearls` (`state.txt`, `buffer.wav`).
+Freezing with the gate alone doesn't save the buffer: a gate may freeze and
+release many times a minute. Each save rewrites a file of at most a few
+megabytes, which is negligible wear for an SD card.
 
 ### Differences from a real Beads
 
@@ -77,17 +151,20 @@ selector.
 - **Sample rate:** the codec stays at 48 kHz.
   - Dirty tape uses Beads' own 48 kHz + 2:1 resampling path.
   - Vintage digital runs at 32 kHz through a polyphase resampler.
-- **Not persistent:** the quality setting resets to digital after a reboot, and
-  the frozen buffer is not saved to storage yet.
-- **Gate timing:** gates are read and written once per Csound control period,
-  about 1.3 ms with Csound's rendering bursts on top. CVs go through the
-  Nebulae's Python control loop, so a CV that changes together with a seed
-  trigger may land a few milliseconds late.
+- **Gate timing.** Csound renders audio in bursts, so reading the gates once
+  per control period put edges up to a few milliseconds early or late.
+  - Since pearls5, a separate thread reads the Freeze and Reset gates every
+    0.2 ms and timestamps each edge, and each edge is placed on the matching
+    sample.
+  - The EOL output is scheduled the same way.
+  - The result is a small constant delay instead of jitter.
+  - CVs still go through the Nebulae's Python control loop, so a CV that
+    changes together with a seed trigger may land a few milliseconds late.
 
 ## Installing with a USB stick (no SSH)
 
 This uses the Nebulae's normal firmware-update mechanism. The update is the
-official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls4`).
+official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls5`).
 
 > **Check your hardware first.** This firmware is for Nebulae v2 units with a
 > **Raspberry Pi 3** on the back. A Pi 3 has full-size HDMI and a micro-USB
@@ -96,7 +173,7 @@ official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls4`).
 
 1. Copy `neb_update.zip` to the **root of your USB stick**. Your audio files
    and instruments can stay on it. Get the file from
-   `FirmwareUpdates/v_2_1_2_pearls4/` in this repository, or make it with
+   `FirmwareUpdates/v_2_1_2_pearls5/` in this repository, or make it with
    `./create_fw_update.sh`.
 2. With the stick inserted, power the Nebulae on. It installs the update
    (the LEDs show the update animation) and reboots by itself. It removes
@@ -156,6 +233,9 @@ missing: `sudo pacman -S gcc make`. Remove with `./install.sh --uninstall`.
 All are inactive for other instruments:
 - `controlhandler.py`: config keys that let an instrument read gate jacks
   itself (`ignoregate`) and drive the EOL jack (`eol,engine`).
+- `controlhandler.py`: `ignorealtgate` makes secondary buttons ignore their
+  gate jacks. Pearls uses it so that a clock in the Reset or Next jack can't
+  save or load while Source is held.
 - `ui.py`: Pearls LED feedback (`ui,pearls`).
 - `nebulae.py`: if an instrument's orchestra fails to compile, Nebulae falls
   back to the Granular Looper instead of failing at every boot.
@@ -196,7 +276,10 @@ In the tester:
   fewer than two, Next does nothing.
 - **Reset** is a short tap, so it seeds grains and unlocks the generator.
   Holding it to re-lock isn't possible there.
-- **Secondary buttons** (mono buffer, randomness flavour) aren't available yet.
+- **Secondary buttons** aren't available yet. These are the mono buffer, the
+  randomness flavour, loading and saving.
+- **Files:** loading, saving and memory use the Nebulae's folders. On a
+  computer they do nothing.
 - **Gate jacks and the EOL output** don't exist on a computer. A
   `GPIO gate access unavailable` warning is expected.
 
@@ -211,7 +294,7 @@ don't.
 
 ```sh
 cd /home/alarm/QB_Nebulae_V2/Code/beads_port
-make test                     # engine tests (71 checks)
+make test                     # engine tests (228 checks)
 make bench && build/pearls_bench   # CPU use per mode; stop Nebulae first
 ```
 
@@ -220,7 +303,9 @@ make bench && build/pearls_bench   # CPU use per mode; stop Nebulae first
 - **Audio.** Listen for clicks or dropouts at high density and in delay
   mode. If there are any, raise `-B` (then `-b`) in `pearls.instr`.
 - **Controls.** Gates on Freeze and Reset, the EOL output, Next cycling through
-  the four colours, and synth mode on Source.
+  the four colours, synth mode on Source, tap tempo on Record.
+- **Files.** Load a sample (Source + Next), save it (Source + Reset), power
+  cycle with a frozen buffer.
 - **Logs.** `pearls_install_log.txt` on the stick shows the install. Over SSH,
   `journalctl -u nebulae` shows Csound messages. A warning saying
   `pearls: GPIO gate access unavailable` means the gate jacks are not being
@@ -235,7 +320,8 @@ for the harnesses.
 ```sh
 make test                      # engine tests
 make                           # build/libpearls.so (Csound opcode)
-python3 tools/csound_harness.py      # pearls.instr in csound, offline
+python3 tools/csound_harness.py      # pearls.instr in csound, offline,
+                                     # with loading, saving and a restart
 python3 tools/csound_api_harness.py  # same, through the API like nebulae.py
 make render
 build/pearls_render -i loop.wav -o out.wav density=0.8 size=0.4 freeze=1@5 quality=0@8
@@ -275,7 +361,7 @@ controls, inject crashes, and restart Nebulae as systemd does. Run it as root
 micromamba create -p ~/py27 -c conda-forge python=2.7 numpy=1.14
 export PYTHON2=~/py27/bin/python
 make                                    # desktop build of the plugin
-S=tools/nebulae_sim/sim.sh FW=../../FirmwareUpdates/v_2_1_2_pearls4/neb_update.zip
+S=tools/nebulae_sim/sim.sh FW=../../FirmwareUpdates/v_2_1_2_pearls5/neb_update.zip
 $S $FW user pearls 30 build/libpearls.so                       # boot into Pearls
 NEBSIM_SWITCH_TO=user/pearls $S $FW factory a_granularlooper 40 build/libpearls.so
 NEBSIM_SET="source=1" NEBSIM_KEEP_LOG=1 $S $FW user pearls 20 build/libpearls.so
@@ -294,6 +380,8 @@ engine/                 host-independent engine
   gain_control.*          Beads AGC, adapted to float input
   rational_resampler.h    48 kHz <-> 32 kHz for vintage digital
   rpi_gpio.*              gate jacks via /dev/gpiomem
+  gate_timing.h           timestamped gate edges -> sample positions
+  pearls_files.*          WAV files, saved state, USB stick
 csound/pearls_opcode.cc Csound plugin opcode "pearls"
 boot_install.sh         installs the prebuilt plugin at boot (USB install)
 install.sh              builds and installs on the module (SSH install)

@@ -62,6 +62,14 @@ class NebulaeGates {
     return !(gpio_[kGplev0] & (1u << pin));
   }
 
+  // Gate states of all pins at once (bit n = gate high at BCM pin n).
+  uint32_t gates() const {
+    if (!gpio_) {
+      return 0;
+    }
+    return ~gpio_[kGplev0];
+  }
+
   void set_eol(bool high) {
     if (!gpio_) {
       return;

@@ -26,9 +26,9 @@
 //   pearls_render [-i in.wav] -o out.wav [-t seconds] [name=value[@time] ...]
 //
 // Names are Nebulae controls: start size window density pitch speed overlap
-// blend start_alt size_alt window_alt pitch_alt density_alt freeze reset
-// source quality mono sparse, plus the gate inputs freeze_gate and
-// seed_gate. Without -i, a test signal (two sines) is used.
+// blend start_alt size_alt window_alt pitch_alt density_alt overlap_alt
+// blend_alt freeze reset source quality mono sparse record, plus the gate
+// inputs freeze_gate and seed_gate. Without -i, a test signal (two sines) is used.
 //
 // Example: pearls_render -i loop.wav -o out.wav density=0.8 freeze=1@4
 
@@ -70,6 +70,8 @@ bool Apply(const Event& e, NebulaeControls* n, float* freeze_gate,
   floats["window_alt"] = &n->window_alt;
   floats["pitch_alt"] = &n->pitch_alt;
   floats["density_alt"] = &n->density_alt;
+  floats["overlap_alt"] = &n->overlap_alt;
+  floats["blend_alt"] = &n->blend_alt;
   floats["freeze_gate"] = freeze_gate;
   floats["seed_gate"] = seed_gate;
   if (floats.count(e.name)) {
@@ -82,6 +84,7 @@ bool Apply(const Event& e, NebulaeControls* n, float* freeze_gate,
   else if (e.name == "source") n->source = b;
   else if (e.name == "mono") n->mono = b;
   else if (e.name == "sparse") n->sparse = b;
+  else if (e.name == "record") n->record = b;
   else if (e.name == "quality") n->quality = int(e.value);
   else return false;
   return true;

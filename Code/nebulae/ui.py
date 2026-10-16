@@ -786,16 +786,27 @@ class UserInterface(object):
                     self.controlhandler.enterNormalMode()
         self.set_pitch_leds(mode)
 
-    # Pearls (Beads port, see Code/beads_port): the Reset LED shows grain
-    # activity like the Beads seed LED (dim while the generator is locked and
-    # idle), and the encoder LEDs show the Beads quality colour for 1.5 s
-    # after it changes. Only active for instruments with "ui,pearls" config.
+    # Pearls (Beads port, see Code/beads_port):
+    # - the Reset LED shows grain activity like the Beads seed LED (dim while
+    #   the generator is locked and idle);
+    # - the Freeze LED shows whether the buffer is frozen (also by the gate,
+    #   or held after loading a sample);
+    # - the Record LED blinks with the tap tempo clock (otherwise it lights
+    #   while pressed, as usual);
+    # - the Next LED blinks while a sample is loaded or the buffer saved, then
+    #   the encoder LEDs flash green (loaded), blue (saved) or red (failed);
+    # - otherwise the encoder LEDs show the Beads quality colour for 1.5 s
+    #   after it changes.
+    # Only active for instruments with "ui,pearls" config.
     def update_pearls_leds(self):
         ch = self.controlhandler
         if getattr(ch, "pearls_quality_comm", None) is None:
             return
         ch.pearls_quality_comm.update()
         ch.pearls_seedled_comm.update()
+        ch.pearls_frozen_comm.update()
+        ch.pearls_clock_comm.update()
+        ch.pearls_io_comm.update()
         seed = ch.pearls_seedled_comm.getState()
         if seed >= 1.0:
             self.set_button_led("reset", 1.0)
@@ -803,11 +814,25 @@ class UserInterface(object):
             self.set_button_led("reset", 0.15)
         else:
             self.set_button_led("reset", 0.0)
+        self.set_button_led("freeze", 1.0 if ch.pearls_frozen_comm.getState() >= 0.5 else 0.0)
+        clock = ch.pearls_clock_comm.getState()
+        if clock >= 1.0:
+            self.set_button_led("record", 1.0)
+        elif clock > 0.0:
+            self.set_button_led("record", 0.1)
+        io = int(ch.pearls_io_comm.getState() + 0.5)
+        if io == 1:
+            self.set_button_led("next", 1.0 if (self.now // 100) % 2 == 0 else 0.0)
         quality = int(ch.pearls_quality_comm.getState()) % 4
         if quality != self.pearls_quality:
             self.pearls_quality = quality
             self.pearls_quality_time = self.now
-        if self.now - self.pearls_quality_time < 1500:
+        if io >= 2:
+            # Loaded, saved, failed.
+            r, g, b = [(0, 4095, 0), (0, 0, 4095), (4095, 0, 0)][min(io, 4) - 2]
+            for name in ["speed_pos", "speed_neg", "pitch_pos", "pitch_neg"]:
+                self.set_rgb(name, r, g, b)
+        elif self.now - self.pearls_quality_time < 1500:
             # Beads quality palette: dirty tape, clean tape, vintage, digital.
             palette = [(2048, 0, 768), (4095, 2304, 0), (0, 4095, 3072), (3072, 3072, 3328)]
             r, g, b = palette[quality]

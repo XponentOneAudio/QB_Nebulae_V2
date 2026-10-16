@@ -50,6 +50,11 @@ struct Parameters {
   RandomizedParameter shape;
   RandomizedParameter pitch;
   bool monophonic_mode;
+  // Nebulae port: probability of playing a grain in reverse on top of the
+  // short-grain reversal of Beads (0 = Beads behaviour), and extra random
+  // panning of the grains (0 = Beads behaviour, 1 = uniform across the field).
+  float reverse_probability;
+  float stereo_spread;
 };
 
 template<typename T, int num_grains>
@@ -124,6 +129,9 @@ class GranularPlayer {
     const float total_spread = ComputeSpread(trigger, p);
     const float pan_spread = 0.5f * num_active_grains * total_spread;
     *pan = BoundedRandomFloat(pan_spread);
+    if (p.stereo_spread > 0.0f) {
+      *pan += p.stereo_spread * (stmlib::Random::GetFloat() - *pan);
+    }
   }
   
   inline T* new_grain() { return grain_priority_list_[0]; }

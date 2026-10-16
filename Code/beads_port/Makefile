@@ -53,7 +53,8 @@ UPSTREAM_SRC = \
 ENGINE_SRC = \
 	engine/pearls_engine.cc \
 	engine/gain_control.cc \
-	engine/rpi_gpio.cc
+	engine/rpi_gpio.cc \
+	engine/pearls_files.cc
 
 LIB_OBJ = $(patsubst %.cc,$(BUILD)/obj/%.o,$(UPSTREAM_SRC) $(ENGINE_SRC))
 

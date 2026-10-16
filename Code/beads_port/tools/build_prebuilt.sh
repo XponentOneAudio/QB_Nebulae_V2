@@ -7,7 +7,8 @@
 #   ABI elements that are identical from Csound 6.08 to 6.18 on armhf
 #   (OPDS/OENTRY/INSDS layout, plugin API 4.0, the CSOUND functions it calls).
 # - System libraries: needs only glibc 2.17 (2012) and libstdc++ symbols from GCC 4.x
-#   (-fno-sized-deallocation), so it loads on the 2017-2019 Arch Linux ARM
+#   (-fno-sized-deallocation, and the pre-C++11 std::string ABI), so it loads
+#   on the 2017-2019 Arch Linux ARM
 #   images of the Nebulae. Recent armhf toolchains default to a 64-bit
 #   time_t (glibc 2.34+); the classic 32-bit ABI of those images is used.
 #
@@ -37,7 +38,7 @@ echo "#define USE_DOUBLE 1" > "$HEADERS/include/float-version.h"
 
 make -C "$HERE" -j4 BUILD="$BUILD" CXX="$CXX" \
     CSOUND_INCLUDE="$HEADERS/include" CSOUND_DOUBLE=1 \
-    CXXFLAGS="-O2 -fno-sized-deallocation -U_TIME_BITS -U_FILE_OFFSET_BITS" \
+    CXXFLAGS="-O2 -fno-sized-deallocation -D_GLIBCXX_USE_CXX11_ABI=0 -U_TIME_BITS -U_FILE_OFFSET_BITS" \
     "$BUILD/libpearls.so"
 
 mkdir -p "$OUT"

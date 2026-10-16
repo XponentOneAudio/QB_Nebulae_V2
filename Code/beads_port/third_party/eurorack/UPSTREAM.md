@@ -38,4 +38,18 @@ Second change, also small:
   Nebulae has a dedicated gate output jack (EOL), so the port keeps stereo
   audio and sends the gate there. Nothing changes when no sink is set.
 
+Third change, for the Pearls additions (pearls5). Every addition defaults to
+the upstream behaviour:
+
+- `beads/dsp/granular_player.h`: `Parameters` gains `reverse_probability` and
+  `stereo_spread`. With a spread above 0, each grain's pan moves towards a
+  uniformly random position.
+- `beads/dsp/delay_granular_player.h`: with a reverse probability above 0, a
+  grain also plays backwards with that probability, in addition to Beads'
+  short-grain reversal.
+- `beads/dsp/granular_processor.h` and `beads/dsp/processor.h`: accessors to
+  read, write and trim the recording buffer at its own rate. These are used
+  to load samples and to save the buffer. `WasteCPUCycles` initialises the
+  two new parameters.
+
 `git diff --no-index` against the upstream commit shows exactly these edits.

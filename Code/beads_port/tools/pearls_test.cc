@@ -25,11 +25,18 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <vector>
 
+#include <unistd.h>
+
+#include <string>
+
+#include "engine/gate_timing.h"
 #include "engine/nebulae_mapping.h"
 #include "engine/pearls_engine.h"
+#include "engine/pearls_files.h"
 #include "engine/rational_resampler.h"
 
 using namespace pearls;
@@ -440,6 +447,511 @@ void TestNebulaeMapping() {
   CHECK(GainFromKnob(1.0f) == 255, "max manual gain");
 }
 
+
+// Runs the engine until the current transfer is done (at most `seconds`).
+bool FinishTransfer(Engine* engine, const Controls& c, float seconds,
+                    std::vector<float>* out = NULL) {
+  float silence[64] = { 0 };
+  float l[64], r[64];
+  for (size_t n = 0; n < size_t(seconds * kSr / 64.0f); ++n) {
+    if (engine->transfer_state() == TRANSFER_DONE) {
+      return true;
+    }
+    engine->Process(c, silence, silence, NULL, NULL, l, r, NULL, 64);
+    if (out) {
+      out->insert(out->end(), l, l + 64);
+    }
+  }
+  return engine->transfer_state() == TRANSFER_DONE;
+}
+
+void Idle(Engine* engine, const Controls& c, float seconds) {
+  FinishTransfer(engine, c, seconds);
+}
+
+const char* kQualityNames[] = {
+  "dirty tape", "clean tape", "vintage", "digital"
+};
+
+void TestBufferTransfers() {
+  printf("loading and saving the buffer\n");
+  const float rates[] = { 24000.0f, 24000.0f, 32000.0f, 48000.0f };
+  for (int quality = 0; quality < 4; ++quality) {
+    for (int mono = 0; mono < 2; ++mono) {
+      Engine engine;
+      engine.Init();
+      Controls c;
+      c.SetDefaults();
+      c.quality = quality;
+      c.mono = mono;
+      c.dry_wet = 1.0f;
+      c.density = 0.85f;
+      Idle(&engine, c, 0.2f);
+
+      // A 2 s chirp at the buffer's own rate.
+      const float rate = rates[quality];
+      const size_t frames = size_t(2.0f * rate);
+      std::vector<float> l(frames), r(frames);
+      for (size_t i = 0; i < frames; ++i) {
+        const float t = float(i) / rate;
+        l[i] = 0.5f * sinf(2.0f * float(M_PI) * (100.0f + 200.0f * t) * t);
+        r[i] = mono ? l[i] : 0.4f * sinf(2.0f * float(M_PI) * 300.0f * t);
+      }
+      CHECK(engine.StartLoad(&l[0], &r[0], frames, rate, true), "start load");
+      std::vector<float> during;
+      CHECK(FinishTransfer(&engine, c, 2.0f, &during), "%s mono=%d: load "
+            "does not finish", kQualityNames[quality], mono);
+      engine.EndTransfer();
+      CHECK(engine.status().held, "held after load");
+
+      std::vector<float> saved_l(Engine::MaxBufferFrames());
+      std::vector<float> saved_r(Engine::MaxBufferFrames());
+      CHECK(engine.StartSave(&saved_l[0], &saved_r[0], saved_l.size()),
+            "start save");
+      CHECK(FinishTransfer(&engine, c, 2.0f), "save does not finish");
+      engine.EndTransfer();
+      CHECK(engine.saved_frames() == frames, "%s mono=%d: saved %zu frames "
+            "instead of %zu", kQualityNames[quality], mono,
+            engine.saved_frames(), frames);
+      CHECK(engine.saved_sample_rate() == rate, "saved rate %f",
+            engine.saved_sample_rate());
+      CHECK(engine.saved_mono() == bool(mono), "saved mono flag");
+      double err = 0.0, ref = 0.0;
+      for (size_t i = 0; i < std::min(frames, engine.saved_frames()); ++i) {
+        const float want_l = mono ? 0.5f * (l[i] + r[i]) : l[i];
+        const float want_r = mono ? want_l : r[i];
+        err += pow(saved_l[i] - want_l, 2) + pow(saved_r[i] - want_r, 2);
+        ref += pow(want_l, 2) + pow(want_r, 2);
+      }
+      const float snr = 10.0f * log10f(float(ref / std::max(err, 1e-20)));
+      // Mu-law 8-bit vs 12/16-bit.
+      CHECK(snr > (quality == 0 ? 30.0f : 60.0f), "%s mono=%d: snr %.1f dB",
+            kQualityNames[quality], mono, snr);
+
+      // Saving what was saved and loading it back is lossless.
+      const size_t n = engine.saved_frames();
+      std::vector<float> again_l(saved_l.begin(), saved_l.begin() + n);
+      std::vector<float> again_r(saved_r.begin(), saved_r.begin() + n);
+      engine.StartLoad(&again_l[0], &again_r[0], n, rate, true);
+      FinishTransfer(&engine, c, 2.0f);
+      engine.EndTransfer();
+      engine.StartSave(&saved_l[0], &saved_r[0], saved_l.size());
+      FinishTransfer(&engine, c, 2.0f);
+      engine.EndTransfer();
+      size_t different = 0;
+      for (size_t i = 0; i < n; ++i) {
+        different += saved_l[i] != again_l[i] || saved_r[i] != again_r[i];
+      }
+      CHECK(engine.saved_frames() == n && different == 0,
+            "%s mono=%d: round trip changed %zu frames",
+            kQualityNames[quality], mono, different);
+
+      // The held buffer plays with no input.
+      std::vector<float> out;
+      for (int k = 0; k < 2000; ++k) {
+        float silence[64] = { 0 }, ol[64], orr[64];
+        engine.Process(c, silence, silence, NULL, NULL, ol, orr, NULL, 64);
+        out.insert(out.end(), ol, ol + 64);
+      }
+      const float rms = Rms(out, 1.0f, 2.6f);
+      CHECK(rms > 0.03f, "%s mono=%d: loaded buffer silent (%f)",
+            kQualityNames[quality], mono, rms);
+      printf("  %-10s mono=%d: %zu frames at %.0f Hz, snr %.1f dB, "
+             "playback rms %.3f\n", kQualityNames[quality], mono, n, rate,
+             snr, rms);
+    }
+  }
+
+  // Resampling and truncation: 10 s at 44.1 kHz into the 4 s digital buffer.
+  Engine engine;
+  engine.Init();
+  Controls c;
+  c.SetDefaults();
+  Idle(&engine, c, 0.1f);
+  const size_t frames = 441000;
+  std::vector<float> l(frames), r(frames);
+  for (size_t i = 0; i < frames; ++i) {
+    l[i] = r[i] = 0.5f * sinf(2.0f * float(M_PI) * 1000.0f * i / 44100.0f);
+  }
+  engine.StartLoad(&l[0], &r[0], frames, 44100.0f, true);
+  FinishTransfer(&engine, c, 2.0f);
+  engine.EndTransfer();
+  std::vector<float> saved_l(Engine::MaxBufferFrames());
+  std::vector<float> saved_r(Engine::MaxBufferFrames());
+  engine.StartSave(&saved_l[0], &saved_r[0], saved_l.size());
+  FinishTransfer(&engine, c, 2.0f);
+  engine.EndTransfer();
+  saved_l.resize(engine.saved_frames());
+  CHECK(engine.saved_frames() > 190000 && engine.saved_frames() < 192000,
+        "digital stereo buffer holds 4 s: %zu", engine.saved_frames());
+  const float f = ZeroCrossingFrequency(saved_l, 0.5f, 3.5f);
+  CHECK(fabsf(f - 1000.0f) < 2.0f, "1 kHz after 44.1k -> 48k: %f", f);
+  printf("  44.1 kHz sample: %zu frames kept, %.1f Hz\n",
+         engine.saved_frames(), f);
+}
+
+void TestHoldRelease() {
+  printf("a loaded buffer stays frozen until Freeze is released\n");
+  for (int freeze_first = 0; freeze_first < 2; ++freeze_first) {
+    Engine engine;
+    engine.Init();
+    Controls c;
+    c.SetDefaults();
+    c.freeze = freeze_first;
+    Idle(&engine, c, 0.1f);
+    std::vector<float> l(48000, 0.25f), r(48000, 0.25f);
+    engine.StartLoad(&l[0], &r[0], l.size(), 48000.0f, true);
+    FinishTransfer(&engine, c, 1.0f);
+    engine.EndTransfer();
+    Idle(&engine, c, 0.1f);
+    CHECK(engine.status().frozen && engine.status().latched_frozen,
+          "frozen after load");
+    const uint32_t generation = engine.buffer_generation();
+    if (freeze_first) {
+      c.freeze = false;  // release
+    } else {
+      c.freeze = true;   // engage...
+      Idle(&engine, c, 0.1f);
+      CHECK(engine.status().frozen, "still frozen with Freeze on");
+      c.freeze = false;  // ...and release
+    }
+    Idle(&engine, c, 0.1f);
+    CHECK(!engine.status().frozen && !engine.status().held,
+          "freeze_first=%d: released", freeze_first);
+    CHECK(engine.buffer_generation() != generation,
+          "recording again changes the buffer");
+  }
+
+  // The freeze gate releases it too; the buffer doesn't change while held.
+  Engine engine;
+  engine.Init();
+  Controls c;
+  c.SetDefaults();
+  Idle(&engine, c, 0.1f);
+  std::vector<float> l(48000, 0.25f), r(48000, 0.25f);
+  engine.StartLoad(&l[0], &r[0], l.size(), 48000.0f, true);
+  FinishTransfer(&engine, c, 1.0f);
+  engine.EndTransfer();
+  const uint32_t generation = engine.buffer_generation();
+  Idle(&engine, c, 0.5f);
+  CHECK(engine.buffer_generation() == generation, "held buffer unchanged");
+  float in[64] = { 0 }, out_l[64], out_r[64];
+  uint8_t high[64], low[64];
+  memset(high, 1, sizeof(high));
+  memset(low, 0, sizeof(low));
+  for (int i = 0; i < 100; ++i) {
+    engine.Process(c, in, in, high, NULL, out_l, out_r, NULL, 64);
+  }
+  CHECK(engine.status().held, "held while the gate is high");
+  for (int i = 0; i < 100; ++i) {
+    engine.Process(c, in, in, low, NULL, out_l, out_r, NULL, 64);
+  }
+  CHECK(!engine.status().held, "released by the gate");
+}
+
+void TestTapTempo() {
+  printf("tap tempo\n");
+  Engine engine;
+  engine.Init();
+  // Taps every 0.4 s from 1 s to 2.2 s; held for 1.2 s at 6 s.
+  Signals s = Run(
+      &engine, 8.0f,
+      [](size_t i, int) { return Sine(i, 220.0f, 0.3f); },
+      [](size_t i, Controls* c) {
+        c->density = 0.75f;
+        c->dry_wet = 1.0f;
+        c->gain = 1;
+        const float t = float(i) / kSr;
+        bool tap = false;
+        for (int k = 0; k < 4; ++k) {
+          const float start = 1.0f + 0.4f * k;
+          tap = tap || (t >= start && t < start + 0.05f);
+        }
+        c->tap = tap || (t >= 6.0f && t < 7.2f);
+      });
+  (void) s;
+  CHECK(!engine.status().clock_running, "clock stopped by a long press");
+
+  // Grain gates follow the clock.
+  Engine engine2;
+  engine2.Init();
+  std::vector<size_t> beats;
+  bool running = false;
+  bool previous_led = false;
+  Signals s2 = Run(
+      &engine2, 6.0f,
+      [](size_t i, int) { return Sine(i, 220.0f, 0.3f); },
+      [&](size_t i, Controls* c) {
+        // With a clock, density right of noon is the probability of a grain
+        // on each beat: fully clockwise = every beat.
+        c->density = 1.0f;
+        c->dry_wet = 1.0f;
+        c->gain = 1;
+        const float t = float(i) / kSr;
+        bool tap = false;
+        for (int k = 0; k < 3; ++k) {
+          const float start = 0.5f + 0.25f * k;
+          tap = tap || (t >= start && t < start + 0.03f);
+        }
+        c->tap = tap;
+        running = running || engine2.status().clock_running;
+        const bool led = engine2.status().clock_led;
+        if (led && !previous_led) {
+          beats.push_back(i);
+        }
+        previous_led = led;
+      });
+  CHECK(running && engine2.status().clock_running, "clock running");
+  CHECK(engine2.status().seed_input_patched, "clock drives the seed input");
+  size_t gates = 0;
+  for (size_t i = size_t(3.0f * kSr); i < s2.gate.size(); ++i) {
+    gates += s2.gate[i] && !s2.gate[i - 1];
+  }
+  // 3 s at 4 beats per second.
+  CHECK(gates >= 10 && gates <= 14, "%zu grains in 3 s at 240 BPM", gates);
+  float interval = 0.0f;
+  if (beats.size() > 4) {
+    interval = float(beats.back() - beats[beats.size() - 4]) / 3.0f / kSr;
+  }
+  CHECK(fabsf(interval - 0.25f) < 0.005f, "beat interval %f s", interval);
+  printf("  %zu grains in 3 s, beat every %.3f s\n", gates, interval);
+}
+
+void TestNewControlsStable() {
+  printf("reverse and stereo spread in all modes\n");
+  for (int quality = 0; quality < 4; ++quality) {
+    for (int synth = 0; synth < 2; ++synth) {
+      Engine engine;
+      engine.Init();
+      Signals s = Run(
+          &engine, 3.0f,
+          [](size_t i, int ch) { return Sine(i, ch ? 330.0f : 220.0f, 0.4f); },
+          [=](size_t, Controls* c) {
+            c->quality = quality;
+            c->synth = synth;
+            c->density = 0.9f;
+            c->size = 0.6f;
+            c->time = 0.05f;  // tape buffers are long: read recent audio
+            c->dry_wet = 1.0f;
+            c->reverse = 1.0f;
+            c->spread = 1.0f;
+            c->gain = 1;
+          });
+      CHECK(AllFiniteAndBounded(s), "q%d synth=%d: bad samples", quality,
+            synth);
+      CHECK(Rms(s.out_l, 1.0f, 3.0f) > 0.01f, "q%d synth=%d: silent",
+            quality, synth);
+    }
+  }
+  // Reversed grains play a rising sawtooth backwards.
+  for (int reverse = 0; reverse < 2; ++reverse) {
+    Engine engine;
+    engine.Init();
+    Controls c;
+    c.SetDefaults();
+    c.density = 0.8f;
+    c.size = 0.5f;
+    c.shape = 0.5f;
+    c.dry_wet = 1.0f;
+    c.reverse = reverse;
+    Idle(&engine, c, 0.1f);
+    std::vector<float> l(96000), r(96000);
+    for (size_t i = 0; i < l.size(); ++i) {
+      l[i] = r[i] = 0.5f * (float(i % 480) / 480.0f - 0.5f);
+    }
+    engine.StartLoad(&l[0], &r[0], l.size(), 48000.0f, true);
+    FinishTransfer(&engine, c, 1.0f);
+    engine.EndTransfer();
+    std::vector<float> out;
+    for (int k = 0; k < 1500; ++k) {
+      float silence[64] = { 0 }, ol[64], orr[64];
+      engine.Process(c, silence, silence, NULL, NULL, ol, orr, NULL, 64);
+      out.insert(out.end(), ol, ol + 64);
+    }
+    size_t up = 0, down = 0;
+    for (size_t i = 24000; i < out.size(); ++i) {
+      const float d = out[i] - out[i - 1];
+      up += d > 0.0f && d < 0.01f;
+      down += d < 0.0f && d > -0.01f;
+    }
+    CHECK(reverse ? down > 3 * up : up > 3 * down,
+          "reverse=%d: %zu rising, %zu falling steps", reverse, up, down);
+    printf("  reverse=%d: %zu rising, %zu falling steps\n", reverse, up, down);
+  }
+
+  // With full spread, left and right grains differ even for a mono input.
+  Engine engine;
+  engine.Init();
+  Signals s = Run(
+      &engine, 3.0f,
+      [](size_t i, int) { return Sine(i, 220.0f, 0.4f); },
+      [](size_t, Controls* c) {
+        c->density = 0.9f;
+        c->dry_wet = 1.0f;
+        c->spread = 1.0f;
+        c->gain = 1;
+      });
+  double diff = 0.0, sum = 0.0;
+  for (size_t i = size_t(kSr); i < s.out_l.size(); ++i) {
+    diff += pow(s.out_l[i] - s.out_r[i], 2);
+    sum += pow(s.out_l[i] + s.out_r[i], 2);
+  }
+  CHECK(diff > 0.05 * sum, "spread: side/mid energy %f", diff / sum);
+  printf("  spread: side/mid energy ratio %.2f\n", diff / sum);
+}
+
+void TestFiles() {
+  printf("files\n");
+  char dir_template[] = "/tmp/pearls_test_XXXXXX";
+  const std::string dir = mkdtemp(dir_template);
+  std::vector<float> l(1000), r(1000);
+  for (size_t i = 0; i < l.size(); ++i) {
+    l[i] = float(int(i) - 500) / 1024.0f;
+    r[i] = -l[i];
+  }
+  for (int mono = 0; mono < 2; ++mono) {
+    const std::string path = dir + (mono ? "/b.wav" : "/a.wav");
+    std::string error;
+    CHECK(WriteWavFile(path, &l[0], &r[0], l.size(), 32000, mono, &error),
+          "write: %s", error.c_str());
+    AudioData d;
+    CHECK(ReadWavFile(path, 100000, &d, &error), "read: %s", error.c_str());
+    CHECK(d.frames() == l.size() && d.sample_rate == 32000.0f, "format");
+    size_t different = 0;
+    for (size_t i = 0; i < d.frames(); ++i) {
+      different += d.l[i] != l[i] || d.r[i] != (mono ? l[i] : r[i]);
+    }
+    CHECK(different == 0, "mono=%d: %zu frames differ", mono, different);
+    CHECK(ReadWavFile(path, 10, &d, &error) && d.frames() == 10,
+          "max_frames");
+  }
+  // Other encodings: 8-bit, 24-bit, float, 4 channels.
+  {
+    FILE* fp = fopen((dir + "/c.wav").c_str(), "wb");
+    const unsigned char header[] = {
+      'R','I','F','F', 44,0,0,0, 'W','A','V','E',
+      'f','m','t',' ', 16,0,0,0, 1,0, 4,0, 0x44,0xac,0,0, 0,0,0,0, 12,0, 24,0,
+      'd','a','t','a', 12,0,0,0,
+      0,0,0x40, 0,0,0xc0, 1,2,3, 4,5,6 };
+    fwrite(header, 1, sizeof(header), fp);
+    fclose(fp);
+    AudioData d;
+    std::string error;
+    CHECK(ReadWavFile(dir + "/c.wav", 100, &d, &error), "24-bit: %s",
+          error.c_str());
+    CHECK(d.frames() == 1 && d.l[0] == 0.5f && d.r[0] == -0.5f &&
+          d.sample_rate == 44100.0f, "24-bit 4-channel values %f %f",
+          d.l[0], d.r[0]);
+  }
+  {
+    FILE* fp = fopen((dir + "/._d.wav").c_str(), "wb");
+    fputs("AppleDouble", fp);
+    fclose(fp);
+    fp = fopen((dir + "/E.WAV").c_str(), "wb");
+    fclose(fp);
+    fp = fopen((dir + "/f.txt").c_str(), "wb");
+    fclose(fp);
+  }
+  std::vector<std::string> files = ListWavFiles(dir);
+  CHECK(files.size() == 4 && files[0] == dir + "/E.WAV" &&
+        files[1] == dir + "/a.wav", "list: %zu files", files.size());
+  AudioData d;
+  std::string error;
+  CHECK(!ReadWavFile(dir + "/E.WAV", 100, &d, &error), "empty file fails");
+  CHECK(NextFreeFileName(dir, "a") == dir + "/a001.wav", "free name");
+
+  SavedState state;
+  state.quality = 1;
+  state.frozen = true;
+  state.load_index = 7;
+  CHECK(WriteSavedState(dir + "/state.txt", state), "write state");
+  SavedState read;
+  CHECK(ReadSavedState(dir + "/state.txt", &read) && read.quality == 1 &&
+        read.frozen && read.load_index == 7, "read state");
+  CHECK(!ReadSavedState(dir + "/none.txt", &read), "missing state");
+  CHECK(MakeDirectories(dir + "/x/y/z"), "mkdir -p");
+  bool mounted = true;
+  setenv("PEARLS_ROOT", dir.c_str(), 1);
+  Paths paths = Paths::Default();
+  CHECK(!paths.mount_usb && paths.state_dir == dir + "/home/alarm/pearls",
+        "paths under PEARLS_ROOT");
+  CHECK(!MountUsb(paths, &mounted, &error) && !mounted, "no stick dir");
+  MakeDirectories(paths.usb_dir);
+  CHECK(MountUsb(paths, &mounted, &error) && !mounted, "stick dir");
+  unsetenv("PEARLS_ROOT");
+  const std::string command = "rm -rf " + dir;
+  CHECK(system(command.c_str()) == 0, "cleanup");
+}
+
+void TestRenderClock() {
+  printf("gate timing across bursty rendering\n");
+  // Csound renders 4 cycles of 64 frames in a burst every 256 frames, with
+  // up to 2 ms of scheduling jitter; edges happen at random times and are
+  // seen by a 0.2 ms polling thread.
+  const double sr = 48000.0;
+  RenderClock clock;
+  clock.Init(sr, 0.0004 + 64.0 / sr);
+  srand(1);
+  const double latency = 0.005;  // render time ahead of playback
+  double max_error = 0.0;
+  double min_offset = 1e9, max_offset = -1e9;
+  size_t late = 0;
+  std::vector<double> pending;  // edge times not placed yet
+  double next_edge = 0.1;
+  for (uint64_t frame = 0; frame < uint64_t(20 * sr); frame += 64) {
+    const uint64_t burst = frame / 256 * 256;
+    const double jitter = 0.002 * (rand() / double(RAND_MAX));
+    // The burst starts when the hardware needs it, the cycles of a burst
+    // are rendered back to back.
+    const double now = burst / sr - latency + jitter + (frame - burst) /
+        sr * 0.1;
+    clock.Observe(now, frame);
+    while (next_edge < now - 0.0002) {
+      pending.push_back(next_edge);
+      next_edge += 0.01 + 0.03 * (rand() / double(RAND_MAX));
+    }
+    std::vector<double> still;
+    for (size_t i = 0; i < pending.size(); ++i) {
+      const double position = clock.InputFrame(pending[i]);
+      if (position >= double(frame + 64)) {
+        still.push_back(pending[i]);
+        continue;
+      }
+      if (position < double(frame)) {
+        ++late;
+      }
+      if (frame > uint64_t(3 * sr)) {
+        // Constant latency: position in time minus the edge time.
+        const double offset = position / sr - pending[i];
+        min_offset = std::min(min_offset, offset);
+        max_offset = std::max(max_offset, offset);
+      }
+    }
+    pending.swap(still);
+    // Output: an edge at this frame must be scheduled after now.
+    const double t = clock.OutputTime(double(frame));
+    if (frame > uint64_t(3 * sr)) {
+      max_error = std::max(max_error, now - t);
+    }
+  }
+  const double spread = max_offset - min_offset;
+  CHECK(late == 0, "%zu input edges placed in an earlier cycle", late);
+  CHECK(spread < 0.0005, "input timing spread %.3f ms", spread * 1000.0);
+  CHECK(max_error <= 0.0, "output edges scheduled in the past (%f)",
+        max_error);
+  printf("  input edge timing spread %.3f ms (was up to %.1f ms)\n",
+         spread * 1000.0, 256.0 / sr * 1000.0);
+
+  SpscQueue<int, 4> q;
+  for (int i = 0; i < 4; ++i) {
+    CHECK(q.Push(i), "push");
+  }
+  CHECK(!q.Push(5), "full");
+  CHECK(q.Peek() && *q.Peek() == 0, "fifo order");
+  q.Pop();
+  CHECK(q.Push(5), "push after pop");
+}
+
 }  // namespace
 
 int main() {
@@ -453,6 +965,12 @@ int main() {
   TestVintageDelayKeepsPitch();
   TestQualitySwitching();
   TestAllModesStable();
+  TestBufferTransfers();
+  TestHoldRelease();
+  TestTapTempo();
+  TestNewControlsStable();
+  TestFiles();
+  TestRenderClock();
   printf("\n%d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

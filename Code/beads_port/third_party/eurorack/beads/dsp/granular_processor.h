@@ -107,6 +107,31 @@ class GranularProcessor {
         : stereo_delay_line_.remaining();
   }
   
+  // Nebulae port: direct access to the recording buffer, at its own sample
+  // rate, for loading and saving its contents. Delay 1 is the most recent
+  // frame, duration() the oldest.
+  inline int buffer_duration(bool mono) const {
+    return mono ? mono_delay_line_.duration() : stereo_delay_line_.duration();
+  }
+
+  inline int buffer_capacity(bool mono) const {
+    return mono ? 2 * max_delay : max_delay;
+  }
+
+  inline FloatFrame ReadBuffer(bool mono, int delay) const {
+    return mono
+        ? mono_delay_line_.template Read<INTERPOLATION_ZOH>(delay, 0.0f)
+        : stereo_delay_line_.template Read<INTERPOLATION_ZOH>(delay, 0.0f);
+  }
+
+  inline void WriteBuffer(bool mono, FloatFrame frame) {
+    if (mono) {
+      mono_delay_line_.Write(frame);
+    } else {
+      stereo_delay_line_.Write(frame);
+    }
+  }
+
   inline uint8_t* delay_buffer_raw_bytes(bool mono, size_t offset) {
     // Independently of the stereo/mono setting, we're writing in the same
     // bytes anyway!
@@ -127,6 +152,9 @@ class GranularProcessor {
     p.shape.base = 0.0f;
     p.shape.attenuverter = 1.0f;
     p.shape.has_cv = false;
+
+    p.reverse_probability = 0.0f;
+    p.stereo_spread = 0.0f;
 
     p.pitch.base = 0.0f;
     p.pitch.attenuverter = 1.0f;

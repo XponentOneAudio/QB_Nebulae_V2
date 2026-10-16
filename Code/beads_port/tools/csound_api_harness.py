@@ -67,6 +67,8 @@ def main():
                         int(12000 * math.sin(2 * math.pi * 330 * i / 48000)))
             for i in range(48000 * 8)))
 
+    # The opcode's files (saved state) go to a temporary directory.
+    os.environ["PEARLS_ROOT"] = tmp
     c = ctcsound.Csound()
     c.setOption("-i" + inp)      # nebulae.py: -iadc:hw:0,0
     c.setOption("-o" + out)      # nebulae.py: -odac:hw:0,0
