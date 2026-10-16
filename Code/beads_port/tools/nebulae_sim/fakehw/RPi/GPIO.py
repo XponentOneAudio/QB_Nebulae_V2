@@ -4,6 +4,9 @@
 # the buttons and 1 for the Source gate bit (idle after the hardware flip).
 # Buttons can be "pressed" by writing bit numbers to $NEBSIM_BUTTONS_FILE
 # (shiftregister.py: 0 reset, 3 record, 4 freeze, 5 source, 7 next).
+# Replace the file atomically (write another file, then mv): "echo > file"
+# empties it for a moment, which releases every button, e.g. Source while
+# it is held for the secondary layer.
 import os
 
 BCM = 11

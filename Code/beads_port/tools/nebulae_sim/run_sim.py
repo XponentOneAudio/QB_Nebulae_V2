@@ -70,7 +70,8 @@ def switcher():
     app.ui.reload_flag = True
 
 
-# NEBSIM_SET="source=1 density=0.8": set control channels once the
+# NEBSIM_SET="source=1 density=0.8": set control channels (secondary ones
+# too, e.g. file_alt=1) once the
 # instrument runs (as if the button/knob had been used), after
 # NEBSIM_SET_AFTER seconds (default 3).
 def setter():
@@ -85,7 +86,10 @@ def setter():
     for item in settings.split():
         name, value = item.split("=")
         print("NEBSIM: setting %s = %s" % (name, value))
-        app.c_handle.setValue(name, float(value))
+        if name.endswith("_alt"):
+            app.c_handle.setAltValue(name, float(value))
+        else:
+            app.c_handle.setValue(name, float(value))
     sys.stdout.flush()
 
 
