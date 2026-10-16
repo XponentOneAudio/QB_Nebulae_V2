@@ -28,8 +28,9 @@ while read -r path; do
     mode=$(git -C "$REPO" ls-tree HEAD "$path" | cut -d ' ' -f 1)
     [ "$mode" = "100755" ] && chmod +x "$TMP/QB_Nebulae_V2/$path"
     # Text files only (no NUL bytes): strip carriage returns.
-    if ! grep -qP '\x00' "$TMP/QB_Nebulae_V2/$path"; then
-        sed -i 's/\r$//' "$TMP/QB_Nebulae_V2/$path"
+    file="$TMP/QB_Nebulae_V2/$path"
+    if [ "$(tr -d '\000' < "$file" | wc -c)" = "$(wc -c < "$file")" ]; then
+        sed -i 's/\r$//' "$file"
     fi
     echo "  + $path"
 done
@@ -45,6 +46,14 @@ if grep -q $'\r' "$TMP/QB_Nebulae_V2/Code/scripts/startup.sh"; then
 fi
 bash -n "$TMP/QB_Nebulae_V2/Code/scripts/startup.sh"
 bash -n "$TMP/QB_Nebulae_V2/Code/beads_port/boot_install.sh"
+# Binaries must be copied untouched.
+for so in "$TMP"/QB_Nebulae_V2/Code/beads_port/prebuilt/*/libpearls.so; do
+    want=$(grep sha256 "$(dirname "$so")/BUILD_INFO.txt" | cut -d ' ' -f 2)
+    have=$(sha256sum "$so" | cut -d ' ' -f 1)
+    if [ "$want" != "$have" ]; then
+        echo "error: $so does not match BUILD_INFO.txt"; exit 1
+    fi
+done
 [ -d "$TMP/QB_Nebulae_V2/Code/nebulae" ]
 
 mkdir -p "$OUT_DIR"
