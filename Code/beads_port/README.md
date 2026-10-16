@@ -89,7 +89,7 @@ selector.
 ## Installing with a USB stick (no SSH)
 
 This uses the Nebulae's normal firmware-update mechanism. The update is the
-official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls1`).
+official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls2`).
 
 > **Check your hardware first.** This firmware is for Nebulae v2 units with a
 > **Raspberry Pi 3** on the back. A Pi 3 has full-size HDMI and a micro-USB
@@ -98,7 +98,7 @@ official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls1`).
 
 1. Copy `neb_update.zip` to the **root of your USB stick**. Your audio files
    and instruments can stay on it. Get the file from
-   `FirmwareUpdates/v_2_1_2_pearls1/` in this repository, or make it with
+   `FirmwareUpdates/v_2_1_2_pearls2/` in this repository, or make it with
    `./create_fw_update.sh`.
 2. With the stick inserted, power the Nebulae on. It installs the update
    (the LEDs show the update animation) and reboots by itself. It removes
@@ -115,6 +115,9 @@ What happens on the module:
   into Csound's plugin directory.
 - It checks that the plugin really loads and runs in the module's own Csound
   (`tools/verify_plugin.py`).
+- It runs as the `alarm` user, like the other boot scripts, and uses `sudo`
+  for the privileged steps. A copy of the log stays on the module in
+  `/home/alarm/pearls/install_log.txt`.
 - If the check fails and the module has a compiler, it compiles the plugin
   there instead.
 - It never stops the Nebulae from booting, and it doesn't retry a failed

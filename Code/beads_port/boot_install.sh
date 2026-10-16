@@ -13,6 +13,9 @@
 # On every other boot it only checks a marker file and exits.
 #
 # It never stops Nebulae from booting: any failure is logged and skipped.
+#
+# The Nebulae boot scripts run as the "alarm" user and use sudo for
+# privileged steps (see scripts/update.sh); so does this script.
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 PREBUILT="$HERE/prebuilt/armv7/libpearls.so"
@@ -22,10 +25,18 @@ INSTR_DIR=/home/alarm/instr
 MOUNTFS=/home/alarm/QB_Nebulae_V2/Code/scripts/mountfs.sh
 USB_DEV=/dev/sda1
 USB_DIR=/mnt/memory
-LOG=/tmp/pearls_install_log.txt
+# Bump when this script changes, so that a failure recorded by an older
+# version is retried.
+INSTALLER_VERSION=2
+
+if [ "$(id -u)" = "0" ]; then
+    SUDO=""
+else
+    SUDO="sudo"
+fi
 
 [ -f "$PREBUILT" ] || exit 0
-WANTED="prebuilt $(sha256sum "$PREBUILT" | cut -d ' ' -f 1)"
+WANTED="prebuilt $(sha256sum "$PREBUILT" | cut -d ' ' -f 1) installer $INSTALLER_VERSION"
 
 find_plugin_dir() {
     local d
@@ -67,11 +78,19 @@ verify() {
     timeout 120 python2 "$HERE/tools/verify_plugin.py" >> "$LOG" 2>&1
 }
 
-: > "$LOG"
+# Copies a plugin into the Csound plugin directory (owned by root).
+install_plugin() {
+    $SUDO cp "$1" "$PLUGIN_DIR/libpearls.so" >> "$LOG" 2>&1 &&
+        $SUDO chmod 755 "$PLUGIN_DIR/libpearls.so" >> "$LOG" 2>&1 &&
+        sync
+}
+
+LOG=$(mktemp /tmp/pearls_install_log.XXXXXX)
 log "Pearls install - $(date)"
 log "firmware: $(grep VERSION= /home/alarm/QB_Nebulae_V2/Code/config.txt 2>/dev/null | head -n 1)"
 log "plugin: $(cat "$HERE/prebuilt/armv7/BUILD_INFO.txt" 2>/dev/null | grep -E 'commit|sha256' | tr '\n' ' ')"
 log "csound: $(csound --version 2>&1 | grep -m1 -i 'csound version')"
+log "installer: version $INSTALLER_VERSION, running as $(id -un)"
 
 sh "$MOUNTFS" rw
 
@@ -80,7 +99,9 @@ if [ -z "$PLUGIN_DIR" ]; then
     log "ERROR: Csound plugin directory (plugins64-6.0) not found."
 else
     log "Csound plugin directory: $PLUGIN_DIR"
-    cp "$PREBUILT" "$PLUGIN_DIR/libpearls.so" && sync
+    if ! install_plugin "$PREBUILT"; then
+        log "ERROR: could not copy the plugin to $PLUGIN_DIR (details above)."
+    fi
     if verify; then
         RESULT=ok
         mkdir -p "$STATE_DIR" && echo "$WANTED" > "$MARKER"
@@ -91,7 +112,7 @@ else
             log "Compiling Pearls on the module instead (this takes several minutes)..."
             rm -rf "$HERE/build"
             if timeout 1800 make -C "$HERE" -j4 >> "$LOG" 2>&1 &&
-               cp "$HERE/build/libpearls.so" "$PLUGIN_DIR/libpearls.so" && sync && verify; then
+               install_plugin "$HERE/build/libpearls.so" && verify; then
                 RESULT=ok
                 mkdir -p "$STATE_DIR" && echo "local-build" > "$MARKER"
                 log "Compiled plugin installed and verified."
@@ -102,7 +123,7 @@ else
             log "No compiler on the module (g++), so it cannot be compiled here."
         fi
         if [ $RESULT != ok ]; then
-            rm -f "$PLUGIN_DIR/libpearls.so"
+            $SUDO rm -f "$PLUGIN_DIR/libpearls.so"
             # Remember the failure for this prebuilt so the next boot does
             # not retry (and slow down) until a new firmware arrives.
             mkdir -p "$STATE_DIR" && echo "failed $WANTED" > "$MARKER"
@@ -119,17 +140,21 @@ else
     log "Pearls is NOT installed. Nebulae works as before."
 fi
 
+# Keep a copy of the log on the module.
+mkdir -p "$STATE_DIR" && cp "$LOG" "$STATE_DIR/install_log.txt"
+
 # Report on the USB stick.
-if mount "$USB_DEV" "$USB_DIR" 2>/dev/null || grep -q " $USB_DIR " /proc/mounts; then
+if $SUDO mount "$USB_DEV" "$USB_DIR" 2>/dev/null || grep -q " $USB_DIR " /proc/mounts; then
     if [ $RESULT = ok ] && ls "$USB_DIR"/*.instr >/dev/null 2>&1; then
-        cp "$HERE/pearls.instr" "$USB_DIR/"
+        $SUDO cp "$HERE/pearls.instr" "$USB_DIR/"
         log "Copied pearls.instr to the USB stick (it holds other instruments)."
     fi
-    cp "$LOG" "$USB_DIR/pearls_install_log.txt"
+    $SUDO cp "$LOG" "$USB_DIR/pearls_install_log.txt"
     sync
-    umount "$USB_DEV" 2>/dev/null
+    $SUDO umount "$USB_DEV" 2>/dev/null
 fi
 
+rm -f "$LOG"
 sync
 sh "$MOUNTFS" ro
 exit 0
