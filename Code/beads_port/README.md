@@ -57,7 +57,7 @@ name, hence "Pearls".
 | Pitch encoder | PITCH randomness |
 | Density | Input gain: fully CCW = automatic (default), otherwise 1×–40× manual |
 | Speed encoder | Nebulae input level (unchanged) |
-| Reset | Randomness flavour: off = smooth variations, on = sparse jumps |
+| Freeze | Randomness flavour: off = smooth variations, on = sparse jumps |
 | Record | Mono buffer: left input only, twice the recording time |
 
 The Record button is not used in the primary layer. Holding it still gives
@@ -89,7 +89,7 @@ selector.
 ## Installing with a USB stick (no SSH)
 
 This uses the Nebulae's normal firmware-update mechanism. The update is the
-official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls3`).
+official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls4`).
 
 > **Check your hardware first.** This firmware is for Nebulae v2 units with a
 > **Raspberry Pi 3** on the back. A Pi 3 has full-size HDMI and a micro-USB
@@ -98,7 +98,7 @@ official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls3`).
 
 1. Copy `neb_update.zip` to the **root of your USB stick**. Your audio files
    and instruments can stay on it. Get the file from
-   `FirmwareUpdates/v_2_1_2_pearls3/` in this repository, or make it with
+   `FirmwareUpdates/v_2_1_2_pearls4/` in this repository, or make it with
    `./create_fw_update.sh`.
 2. With the stick inserted, power the Nebulae on. It installs the update
    (the LEDs show the update animation) and reboots by itself. It removes

@@ -16,6 +16,14 @@ cfg_path = "/home/alarm/QB_Nebulae_V2/Code/config/"
 debug = False 
 debug_controls = False
 
+# Safety net against boot loops (e.g. a user instrument that crashes Nebulae):
+# Nebulae counts its own start attempts in /tmp (kept across service restarts,
+# cleared on reboot). The count is reset once an instrument has been running
+# for HEALTHY_AFTER seconds. After two failed attempts in a row, Nebulae
+# starts the default instrument instead.
+START_ATTEMPTS_FILE = "/tmp/nebulae_start_attempts"
+HEALTHY_AFTER = 20.0
+
 class Nebulae(object):
 
     def __init__(self):
@@ -66,11 +74,43 @@ class Nebulae(object):
             # set to default instr
             self.new_bank = 'factory'
             self.new_instr = 'a_granularlooper'
+        attempts = self.readStartAttempts()
+        if attempts >= 2 and not (self.new_bank == 'factory' and self.new_instr == 'a_granularlooper'):
+            print "Nebulae failed to start " + self.new_instr + " twice: falling back to a_granularlooper."
+            self.new_bank = 'factory'
+            self.new_instr = 'a_granularlooper'
+            self.writeBootInstr()
+        self.writeStartAttempts(attempts + 1)
+        self.start_time = time.time()
+        self.healthy = False
         self.first_run = True
         self.last_debug_print = time.time()
 
+    def readStartAttempts(self):
+        try:
+            with open(START_ATTEMPTS_FILE, 'r') as f:
+                return int(f.read().strip())
+        except:
+            return 0
+
+    def writeStartAttempts(self, attempts):
+        try:
+            with open(START_ATTEMPTS_FILE, 'w') as f:
+                f.write(str(attempts) + '\n')
+        except:
+            print "Could not write " + START_ATTEMPTS_FILE
+
+    def checkHealthy(self):
+        # Called from the run loops: the current instrument has been running
+        # long enough, so a later restart is not a boot loop.
+        if not self.healthy and time.time() - self.start_time > HEALTHY_AFTER:
+            self.healthy = True
+            self.writeStartAttempts(0)
+
     def start(self, instr, instr_bank):
         print "Nebulae Starting"
+        self.start_time = time.time()
+        self.healthy = False
         if self.currentInstr != self.new_instr:
             reset_settings_flag = True
         else:
@@ -129,6 +169,7 @@ class Nebulae(object):
         if self.first_run == False:
             self.c_handle.restoreAltToDefault()
         while (self.pt.status() == 0): # Run a loop to poll for messages, and handle the UI.
+            self.checkHealthy()
             self.ui.update()
             self.c_handle.updateAll()
             if debug_controls == True:
@@ -149,15 +190,16 @@ class Nebulae(object):
             self.c.cleanup()
             self.ui.reload_flag = False # Clear Reload Flag
             print "Reloading " + self.new_instr + " from " + self.new_bank
-            # Store bank/instr to config
-            self.writeBootInstr()
-            # Get bank/instr from factory
+            # Store bank/instr to config once the instrument has started, so
+            # that one which crashes Nebulae is not started again at boot.
             if self.new_bank == "puredata":
                 self.start_puredata(self.new_instr)
+                self.writeBootInstr()
                 self.run_puredata()
             else:
                 self.c.reset()
                 self.start(self.new_instr, self.new_bank)
+                self.writeBootInstr()
                 self.run()
         else:
             print "Run Loop Ending."
@@ -222,6 +264,7 @@ class Nebulae(object):
         request = False
         self.c_handle.enterPureDataMode()
         while(request != True):
+            self.checkHealthy()
             self.c_handle.updateAll()
             if debug_controls == True:
                 self.c_handle.printAllControls()
@@ -235,13 +278,14 @@ class Nebulae(object):
             self.ui.reload_flag = False # Clear Reload Flag
             print "Reloading " + self.new_instr + " from " + self.new_bank
             self.cleanup_puredata()
-            # Store bank/instr to config
-            self.writeBootInstr()
+            # Store bank/instr to config once the instrument has started.
             if self.new_bank == "puredata":
                 self.start_puredata(self.new_instr)
+                self.writeBootInstr()
                 self.run_puredata()
             else:
                 self.start(self.new_instr, self.new_bank)
+                self.writeBootInstr()
                 self.run()
         else:
             print "Run Loop Ending."

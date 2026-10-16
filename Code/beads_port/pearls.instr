@@ -8,8 +8,6 @@ reset,momentary,rising
 source,latching,falling
 file,triggered,falling
 record,latching,rising
-reset_alt,latching,rising
-record_alt,latching,rising
 ignoregate,freeze,reset
 eol,engine
 ui,pearls
@@ -45,9 +43,15 @@ nebconfigend
 ;   Start / Size / Window / Pitch   TIME / SIZE / SHAPE / PITCH randomness
 ;   Density                         input gain: fully CCW = automatic
 ;   Speed                           Nebulae input level (as usual)
-;   Reset                           randomness flavour: off = smooth
+;   Freeze                          randomness flavour: off = smooth
 ;                                   variations, on = sparse jumps
 ;   Record                          mono buffer (left input, twice as long)
+;
+; Note: don't set "_alt" buttons in the config chunk above (e.g.
+; "freeze_alt,latching,rising"): Nebulae reads "_alt" config lines as default
+; values for secondary controls, and a non-numeric one crashed it (fixed in
+; settings.py since). The default secondary button behaviours are used:
+; Freeze and Record latch.
 
 gkpearls_quality init 3
 
@@ -62,7 +66,7 @@ knext = limit(gkfilesel - kprevfile, 0, 1)
 kprevfile = gkfilesel
 gkpearls_quality = (gkpearls_quality + knext) % 4
 
-aL, aR, kgate, kseedled, kreserve pearls ainl, ainr, gkloopstart, gkloopsize, gkwindow, gkdensity, gkpitch, gkspeed, gkoverlap, gkblend, gkloopstart_alt, gkloopsize_alt, gkwindow_alt, gkpitch_alt, gkdensity_alt, gkfreeze, gkreset, gksource, gkpearls_quality, gkrecord_alt, gkreset_alt, 1
+aL, aR, kgate, kseedled, kreserve pearls ainl, ainr, gkloopstart, gkloopsize, gkwindow, gkdensity, gkpitch, gkspeed, gkoverlap, gkblend, gkloopstart_alt, gkloopsize_alt, gkwindow_alt, gkpitch_alt, gkdensity_alt, gkfreeze, gkreset, gksource, gkpearls_quality, gkrecord_alt, gkfreeze_alt, 1
 
 outs aL, aR
 

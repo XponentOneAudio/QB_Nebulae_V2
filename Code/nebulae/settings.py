@@ -132,6 +132,7 @@ class SettingManager(object):
                         print 'setting ' + newKey + ' to: ' + str(self.configData[newKey])
                         settingsdict[newKey] = self.configData[newKey]
                     else:
+                        new_val = None
                         try:
                             new_val = float(self.configData[newKey][0])
                             print 'setting ' + newKey + ' to: ' + str(new_val)

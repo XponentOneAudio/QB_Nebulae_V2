@@ -160,9 +160,9 @@ class ControlHandler(object):
                     if self.channeldict.has_key(name):
                         self.channeldict[name].setIgnoreGate(True)
             if self.configData.has_key("eol"):
-                self.eol_from_engine = self.configData.get("eol")[0] == "engine"
+                self.eol_from_engine = "engine" in self.configData.get("eol")
             if self.configData.has_key("ui") and self.csound is not None:
-                if self.configData.get("ui")[0] == "pearls":
+                if "pearls" in self.configData.get("ui"):
                     self.pearls_quality_comm = control.CommChannel(self.csound, "pearls_quality")
                     self.pearls_seedled_comm = control.CommChannel(self.csound, "pearls_seedled")
         # Worker for writing audio file.

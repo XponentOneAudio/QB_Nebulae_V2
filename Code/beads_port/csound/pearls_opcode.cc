@@ -191,8 +191,8 @@ int pearls_perf(CSOUND* csound, PEARLS* p) {
   n.reset = *p->kreset >= MYFLT(0.5);
   n.source = *p->ksource >= MYFLT(0.5);
   n.quality = int(*p->kquality + MYFLT(0.5));
-  n.record_alt = *p->kmono >= MYFLT(0.5);
-  n.reset_alt = *p->ksparse >= MYFLT(0.5);
+  n.mono = *p->kmono >= MYFLT(0.5);
+  n.sparse = *p->ksparse >= MYFLT(0.5);
 
   pearls::Controls controls;
   pearls::MapNebulaeControls(n, &controls);

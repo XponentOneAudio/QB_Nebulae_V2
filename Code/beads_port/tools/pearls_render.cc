@@ -27,7 +27,7 @@
 //
 // Names are Nebulae controls: start size window density pitch speed overlap
 // blend start_alt size_alt window_alt pitch_alt density_alt freeze reset
-// source quality record_alt reset_alt, plus the gate inputs freeze_gate and
+// source quality mono sparse, plus the gate inputs freeze_gate and
 // seed_gate. Without -i, a test signal (two sines) is used.
 //
 // Example: pearls_render -i loop.wav -o out.wav density=0.8 freeze=1@4
@@ -80,8 +80,8 @@ bool Apply(const Event& e, NebulaeControls* n, float* freeze_gate,
   if (e.name == "freeze") n->freeze = b;
   else if (e.name == "reset") n->reset = b;
   else if (e.name == "source") n->source = b;
-  else if (e.name == "record_alt") n->record_alt = b;
-  else if (e.name == "reset_alt") n->reset_alt = b;
+  else if (e.name == "mono") n->mono = b;
+  else if (e.name == "sparse") n->sparse = b;
   else if (e.name == "quality") n->quality = int(e.value);
   else return false;
   return true;

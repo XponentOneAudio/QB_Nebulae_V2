@@ -35,6 +35,8 @@
 //   Blend            DRY/WET
 //   Start/Size/Window/Pitch (secondary)   TIME/SIZE/SHAPE/PITCH randomness
 //   Density (secondary)                   input gain (0 = automatic)
+//   Record (secondary)                    mono buffer
+//   Freeze (secondary)                    sparse randomness flavour
 
 #ifndef PEARLS_ENGINE_NEBULAE_MAPPING_H_
 #define PEARLS_ENGINE_NEBULAE_MAPPING_H_
@@ -66,8 +68,8 @@ struct NebulaeControls {
   bool reset;         // reset button (momentary) = seed button
   bool source;        // source button (latched) = synth mode
   int quality;        // 0..3, counted by the orchestra from Next presses
-  bool record_alt;    // secondary Record = mono buffer
-  bool reset_alt;     // secondary Reset = sparse randomness flavour
+  bool mono;          // secondary Record = mono buffer
+  bool sparse;        // secondary Freeze = sparse randomness flavour
 };
 
 inline float Clamp01(float x) {
@@ -115,17 +117,17 @@ inline void MapNebulaeControls(const NebulaeControls& n, Controls* c) {
   c->density = Clamp01(n.density);
   c->pitch = SemitonesFromNebulaePitch(n.pitch);
 
-  c->time_random = RandomAmountFromKnob(n.start_alt, n.reset_alt);
-  c->size_random = RandomAmountFromKnob(n.size_alt, n.reset_alt);
-  c->shape_random = RandomAmountFromKnob(n.window_alt, n.reset_alt);
-  c->pitch_random = RandomAmountFromKnob(n.pitch_alt, n.reset_alt);
+  c->time_random = RandomAmountFromKnob(n.start_alt, n.sparse);
+  c->size_random = RandomAmountFromKnob(n.size_alt, n.sparse);
+  c->shape_random = RandomAmountFromKnob(n.window_alt, n.sparse);
+  c->pitch_random = RandomAmountFromKnob(n.pitch_alt, n.sparse);
 
   c->feedback = Clamp01(n.overlap);
   c->dry_wet = Clamp01(n.blend);
   c->reverb = ReverbFromNebulaeSpeed(n.speed);
 
   c->quality = std::min(std::max(n.quality, 0), int(QUALITY_LAST) - 1);
-  c->mono = n.record_alt;
+  c->mono = n.mono;
   c->synth = n.source;
   c->freeze = n.freeze;
   c->seed_button = n.reset;
