@@ -162,7 +162,9 @@ int pearls_init(CSOUND* csound, PEARLS* p) {
 int pearls_perf(CSOUND* csound, PEARLS* p) {
   PearlsState* s = p->state;
   if (!s) {
-    return csound->PerfError(csound, &(p->h), "%s", "pearls: not initialised");
+    // Not reached: init failed and Csound does not run perf. (PerfError is
+    // avoided: its signature changed between Csound 6 releases.)
+    return NOTOK;
   }
   const uint32_t offset = p->h.insdshead->ksmps_offset;
   const uint32_t early = p->h.insdshead->ksmps_no_end;
@@ -267,6 +269,25 @@ static OENTRY localops[] = {
   }
 };
 
-LINKAGE
+// Equivalent of Csound's LINKAGE macro, written out so that one binary loads
+// in every Csound 6 release: the return type of csound_opcode_init changed
+// from long to int64_t over time, and returning int64_t satisfies both
+// (on 32-bit ARM the low word is in r0 either way, and the high word is 0).
+// The opcode only uses OPDS/INSDS fields and CSOUND functions whose layout
+// is identical from Csound 6.08 to 6.18 (checked on armhf).
+// csdl.h may declare csound_opcode_init with a different return type, so the
+// definition gets another C++ name and the exported symbol name explicitly.
+PUBLIC int64_t pearls_opcode_init(CSOUND* csound, OENTRY** ep)
+    __asm__("csound_opcode_init");
+
+PUBLIC int64_t pearls_opcode_init(CSOUND* csound, OENTRY** ep) {
+  (void) csound;
+  *ep = localops;
+  return int64_t(sizeof(localops));
+}
+
+PUBLIC int csoundModuleInfo(void) {
+  return (CS_APIVERSION << 16) + (CS_APISUBVER << 8) + int(sizeof(MYFLT));
+}
 
 }  // extern "C"

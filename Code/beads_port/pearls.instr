@@ -56,9 +56,7 @@ ainl, ainr inch 1, 2
 
 ; Next (button or gate) steps through the four Beads quality settings.
 knext trigger gkfilesel, 0.5, 0
-if knext == 1 then
-    gkpearls_quality = (gkpearls_quality + 1) % 4
-endif
+gkpearls_quality = (gkpearls_quality + knext) % 4
 
 aL, aR, kgate, kseedled, kreserve pearls ainl, ainr, gkloopstart, gkloopsize, gkwindow, gkdensity, gkpitch, gkspeed, gkoverlap, gkblend, gkloopstart_alt, gkloopsize_alt, gkwindow_alt, gkpitch_alt, gkdensity_alt, gkfreeze, gkreset, gksource, gkpearls_quality, gkrecord_alt, gkreset_alt, 1
 

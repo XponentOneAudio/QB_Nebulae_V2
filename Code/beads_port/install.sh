@@ -67,7 +67,7 @@ fi
 
 if [ $UNINSTALL = 1 ]; then
     sudo rm -f "$PLUGIN_DIR/libpearls.so"
-    rm -f "$INSTR_DIR/pearls.instr"
+    rm -f "$INSTR_DIR/pearls.instr" /home/alarm/pearls/installed.txt
     echo "Pearls removed."
     exit 0
 fi
@@ -95,8 +95,10 @@ if [ $RUN_TESTS = 1 ]; then
 fi
 
 sudo cp "$HERE/build/libpearls.so" "$PLUGIN_DIR/"
-mkdir -p "$INSTR_DIR"
+mkdir -p "$INSTR_DIR" /home/alarm/pearls
 cp "$HERE/pearls.instr" "$INSTR_DIR/"
+# Tells boot_install.sh not to replace this build with the prebuilt one.
+echo "local-build" > /home/alarm/pearls/installed.txt
 
 echo
 echo "Installed:"

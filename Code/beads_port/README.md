@@ -12,8 +12,10 @@ name, hence "Pearls".
 
 > **Status: first port, not yet tested on a Nebulae.** Everything below has been
 > built and tested on a desktop. That includes Csound running the instrument the
-> way the Nebulae firmware does, plus an ARM cross-build of the engine tests.
-> The first run on real hardware is the next step. See [Testing on the
+> way the Nebulae firmware does, and an ARM cross-build of the engine tests. The
+> prebuilt ARM plugin has also passed the full instrument test in an emulated
+> 2018 ARM system (Ubuntu 18.04 armhf: Csound 6.10, glibc 2.27). The first run
+> on real hardware is the next step. See [Testing on the
 > Nebulae](#testing-on-the-nebulae).
 
 ## What you get
@@ -84,54 +86,78 @@ selector.
   Nebulae's Python control loop, so a CV that changes together with a seed
   trigger may land a few milliseconds late.
 
-## Installing on the Nebulae
+## Installing with a USB stick (no SSH)
 
-You need SSH access to the Nebulae (as for Pd patches) and this branch of
-the firmware on it.
+This uses the Nebulae's normal firmware-update mechanism. The update is the
+official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls1`).
 
-1. **Put this firmware on the Nebulae.** Either:
-   - make an update file: run `./create_fw_update.sh` from a checkout of this
-     branch, copy `neb_update.zip` to the root of your USB stick, and boot the
-     Nebulae with it plugged in (your old firmware is kept in
-     `/home/alarm/backup/old`); or
-   - clone it over SSH into `/home/alarm/QB_Nebulae_V2`. Remount read-write
-     first (`sh /home/alarm/QB_Nebulae_V2/Code/scripts/mountfs.sh rw`) and move
-     the old folder out of the way.
+> **Check your hardware first.** This firmware is for Nebulae v2 units with a
+> **Raspberry Pi 3** on the back. A Pi 3 has full-size HDMI and a micro-USB
+> power socket; a Pi 4 has two micro-HDMI ports and USB-C. If yours has a
+> Pi 4, don't install this yet.
 
-   This firmware has three small changes in `Code/nebulae/`, all inactive for
-   other instruments:
-   - generic config keys that let an instrument read gate jacks itself
-     (`ignoregate`) and drive the EOL jack (`eol,engine`);
-   - Pearls LED feedback (`ui,pearls`);
-   - a safety net: if an instrument's orchestra fails to compile (for
-     example, when its plugin is missing), Nebulae falls back to the Granular
-     Looper instead of failing at every boot.
+1. Copy `neb_update.zip` to the **root of your USB stick**. Your audio files
+   and instruments can stay on it. Get the file from
+   `FirmwareUpdates/v_2_1_2_pearls1/` in this repository, or make it with
+   `./create_fw_update.sh`.
+2. With the stick inserted, power the Nebulae on. It installs the update
+   (the LEDs show the update animation) and reboots by itself. It removes
+   `neb_update.zip` from the stick when it's done.
+3. On the next boot, Pearls installs itself before Nebulae starts. This adds a
+   few seconds, once. It then writes **`pearls_install_log.txt`** to the
+   stick. The log ends with either "Instrument installed" or "Pearls is NOT
+   installed. Nebulae works as before." and the reason.
+4. Open the instrument selector (hold the Speed encoder for 1.5 s) and choose
+   `pearls` in the **user** bank.
 
-2. **Build and install** (takes a few minutes, mostly the tests):
+What happens on the module:
+- `boot_install.sh` copies the prebuilt plugin (`prebuilt/armv7/libpearls.so`)
+  into Csound's plugin directory.
+- It checks that the plugin really loads and runs in the module's own Csound
+  (`tools/verify_plugin.py`).
+- If the check fails and the module has a compiler, it compiles the plugin
+  there instead.
+- It never stops the Nebulae from booting, and it doesn't retry a failed
+  install until new firmware arrives.
+- If your stick holds other `.instr` files, it also copies `pearls.instr`
+  there. Otherwise Nebulae would replace the user bank with the stick's
+  instruments and Pearls would disappear.
 
-   ```sh
-   ssh alarm@<nebulae-address>
-   cd /home/alarm/QB_Nebulae_V2/Code/beads_port
-   ./install.sh
-   ```
+**Going back** to the official firmware works the same way. Put the official
+`FirmwareUpdates/v_2_1_2/neb_update.zip` on the stick and boot. The plugin
+file in Csound's plugin directory stays but is unused.
 
-   This builds `libpearls.so` and copies it into the Csound plugin directory.
-   That's outside the firmware folder, so it survives firmware updates. It also
-   copies `pearls.instr` to `/home/alarm/instr`. If `g++` is missing, install
-   it with `sudo pacman -S gcc make`.
+## Installing over SSH (building on the module)
 
-3. **Select it.** Hold the Speed encoder for 1.5 s to open the instrument
-   selector and choose `pearls` in the user bank.
+For development, or if the prebuilt plugin doesn't work on your module.
+You need SSH access (Ethernet on the Pi, user `alarm`, password `alarm`) and
+this firmware on the module (see above, or clone this branch into
+`/home/alarm/QB_Nebulae_V2`).
 
-> **USB sticks with instruments:** if your stick has `.instr` files in its
-> root, Nebulae replaces `/home/alarm/instr` with them when an instrument
-> loads. Copy `pearls.instr` onto the stick as well.
+```sh
+ssh alarm@<nebulae-address>
+cd /home/alarm/QB_Nebulae_V2/Code/beads_port
+./install.sh
+```
 
-To remove: `./install.sh --uninstall`.
+This builds `libpearls.so` on the module and runs the tests, which takes a
+few minutes. It then installs the plugin and `pearls.instr`. If `g++` is
+missing: `sudo pacman -S gcc make`. Remove with `./install.sh --uninstall`.
+
+### Firmware changes in this update
+
+All are inactive for other instruments:
+- `controlhandler.py`: config keys that let an instrument read gate jacks
+  itself (`ignoregate`) and drive the EOL jack (`eol,engine`).
+- `ui.py`: Pearls LED feedback (`ui,pearls`).
+- `nebulae.py`: if an instrument's orchestra fails to compile, Nebulae falls
+  back to the Granular Looper instead of failing at every boot.
+- `scripts/startup.sh`: runs `boot_install.sh`.
 
 ## Testing on the Nebulae
 
-Things to check on the first run:
+Things to check on the first run. The commands need SSH; the listening tests
+don't.
 
 ```sh
 cd /home/alarm/QB_Nebulae_V2/Code/beads_port
@@ -145,7 +171,8 @@ make bench && build/pearls_bench   # CPU use per mode; stop Nebulae first
   mode. If there are any, raise `-B` (then `-b`) in `pearls.instr`.
 - **Controls.** Gates on Freeze and Reset, the EOL output, Next cycling through
   the four colours, and synth mode on Source.
-- **Logs.** `journalctl -u nebulae` shows Csound messages. A warning saying
+- **Logs.** `pearls_install_log.txt` on the stick shows the install. Over SSH,
+  `journalctl -u nebulae` shows Csound messages. A warning saying
   `pearls: GPIO gate access unavailable` means the gate jacks are not being
   read.
 
@@ -165,8 +192,24 @@ build/pearls_render -i loop.wav -o out.wav density=0.8 size=0.4 freeze=1@5 quali
 ```
 
 `pearls_render` takes Nebulae control values (`name=value@seconds`). The
-control names are listed at the top of `tools/pearls_render.cc`. To cross-compile for the Nebulae:
-`make CXX=arm-linux-gnueabihf-g++ BUILD=build-arm`.
+control names are listed at the top of `tools/pearls_render.cc`.
+
+Cross-compiling for the Nebulae: `make CXX=arm-linux-gnueabihf-g++
+BUILD=build-arm`.
+
+The portable binary for USB installs is built by `make prebuilt`
+(`tools/build_prebuilt.sh`). It compiles against the Csound 6.09 headers and
+refuses to produce a binary that needs newer system libraries than the Nebulae
+has. To test that binary in a real ARM Csound under qemu, unpack Ubuntu
+18.04 armhf `csound` packages into a directory and run:
+
+```sh
+python3 tools/csound_harness.py --no-chnexport --plugin-dir prebuilt/armv7 \
+    --csound "qemu-arm -L ROOT ROOT/usr/bin/csound"
+```
+
+`tools/verify_plugin.py [plugin_dir]` is the load-and-run check used on the
+module at boot.
 
 ## Layout
 
@@ -179,7 +222,11 @@ engine/                 host-independent engine
   rational_resampler.h    48 kHz <-> 32 kHz for vintage digital
   rpi_gpio.*              gate jacks via /dev/gpiomem
 csound/pearls_opcode.cc Csound plugin opcode "pearls"
-tools/                  tests, renderer, benchmark, Csound harnesses
+boot_install.sh         installs the prebuilt plugin at boot (USB install)
+install.sh              builds and installs on the module (SSH install)
+prebuilt/armv7/         portable plugin binary (tools/build_prebuilt.sh)
+tools/                  tests, renderer, benchmark, Csound harnesses,
+                        plugin check
 third_party/eurorack/   Beads DSP + stmlib, pinned (see UPSTREAM.md)
 feasibility/            the original feasibility benchmark
 DESIGN.md               design notes

@@ -7,6 +7,12 @@ instrument that plays a control timeline instead of the Nebulae hardware, and
 renders it with the csound command-line program.
 
     tools/csound_harness.py [--instr PATH] [--lib PATH] [--out out.wav]
+                            [--csound CMD] [--plugin-dir DIR]
+
+--plugin-dir loads libpearls.so from a plugin directory (OPCODE6DIR64), as on
+the Nebulae, instead of --opcode-lib. --csound runs another csound binary,
+e.g. an ARM one under emulation:
+    --csound "qemu-arm -L /path/to/armhf-root /path/to/armhf-root/usr/bin/csound"
 
 Exit status is non-zero if Csound fails or the output is silent/invalid.
 """
@@ -102,6 +108,11 @@ def main():
     parser.add_argument("--instr", default=os.path.join(PORT, "pearls.instr"))
     parser.add_argument("--lib", default=os.path.join(PORT, "build", "libpearls.so"))
     parser.add_argument("--out", default=None)
+    parser.add_argument("--csound", default="csound")
+    parser.add_argument("--plugin-dir", default=None)
+    parser.add_argument("--no-chnexport", action="store_true",
+                        help="declare the control globals with init instead of chnexport "
+                             "(Ubuntu 18.04's armhf Csound 6.10 crashes on chnexport under qemu)")
     args = parser.parse_args()
 
     config, instr = parse_instr(args.instr)
@@ -111,27 +122,36 @@ def main():
     write_input(inp, DURATION + 1)
 
     preamble = "ksmps = %s\nsr = %s\n" % (config.get("ksmps", ["128"])[0], config.get("sr", ["48000"])[0])
-    driver = ["\ninstr 99\n"]
-    for t, chn, value in TIMELINE:
-        driver.append("if timeinsts() >= %f && timeinsts() < %f then\n  %s = %s\nendif\n"
-                      % (t, t + 0.0001 + 1.0 / 750, chn, value))
-    driver.append("endin\n")
-    orc = preamble + nebulae_orc_header() + "\nginumfiles init 0\n" + instr + "".join(driver)
-    sco = "i99 0 %f\ni1 0.01 %f\n" % (DURATION, DURATION)
+    # One tiny instrument per timeline event, started from the score, so the
+    # driver needs no conditionals (if/then crashes the armhf Csound 6.10 of
+    # Ubuntu 18.04 under qemu).
+    driver, events = [], []
+    for n, (t, chn, value) in enumerate(TIMELINE):
+        driver.append("\ninstr %d\n%s init %s\nendin\n" % (100 + n, chn, value))
+        events.append("i%d %f 0.001\n" % (100 + n, t))
+    header = nebulae_orc_header()
+    if args.no_chnexport:
+        header = re.sub(r"(gk\w+)\s+chnexport\s+\"\w+\",\s*\d", r"\1 init 0", header)
+    orc = preamble + header + "\nginumfiles init 0\n" + instr + "".join(driver)
+    sco = "".join(events) + "i1 0.01 %f\n" % DURATION
 
     with open(os.path.join(tmp, "test.orc"), "w") as f:
         f.write(orc)
     with open(os.path.join(tmp, "test.sco"), "w") as f:
         f.write(sco)
 
-    cmd = ["csound", "-d", "-m0", "-W", "-o", out, "-i", inp, "--nchnls_i=2",
-           "--opcode-lib=" + args.lib]
+    cmd = args.csound.split() + ["-d", "-m0", "-W", "-o", out, "-i", inp, "--nchnls_i=2"]
+    env = dict(os.environ)
+    if args.plugin_dir:
+        env["OPCODE6DIR64"] = os.path.abspath(args.plugin_dir)
+    else:
+        cmd.append("--opcode-lib=" + args.lib)
     for key in ("-b", "-B"):
         if key in config:
             cmd.append(key + config[key][0])
     cmd += [os.path.join(tmp, "test.orc"), os.path.join(tmp, "test.sco")]
     print(" ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     log = result.stdout + result.stderr
     if result.returncode != 0 or "error" in log.lower() and "0 errors" not in log.lower():
         print(log[-4000:])

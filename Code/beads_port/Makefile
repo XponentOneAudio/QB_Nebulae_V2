@@ -4,9 +4,12 @@
 #   make test         build and run the engine tests
 #   make render       desktop renderer       build/pearls_render
 #   make bench        CPU benchmark          build/pearls_bench
+#   make prebuilt     portable Nebulae binary prebuilt/armv7/libpearls.so
+#                     (see tools/build_prebuilt.sh)
 #
 # Cross-compiling: make CXX=arm-linux-gnueabihf-g++ CSOUND_INCLUDE=...
 # Single precision Csound: make CSOUND_DOUBLE=0
+# Extra compiler flags: make CXXFLAGS="-O3 ..." (added to the required ones)
 
 CXX ?= g++
 BUILD ?= build
@@ -19,8 +22,8 @@ ifneq (,$(filter arm%,$(TARGET_MACHINE)))
   ARCH_FLAGS ?= -mcpu=cortex-a53 -mfpu=neon-fp-armv8 -mfloat-abi=hard
 endif
 
-CXXFLAGS ?= -O2
-CXXFLAGS += $(ARCH_FLAGS) -fPIC -g -Wall -Wno-unused-local-typedefs \
+CXXFLAGS ?= -O2 -g
+ALL_CXXFLAGS = $(CXXFLAGS) $(ARCH_FLAGS) -fPIC -Wall -Wno-unused-local-typedefs \
 	-DTEST -DBEADS_NO_HARDWARE_24K -include cstdio \
 	-I. -Ithird_party/eurorack
 
@@ -46,18 +49,18 @@ ifeq ($(CSOUND_DOUBLE),1)
   CSOUND_FLAGS = -DUSE_DOUBLE
 endif
 
-.PHONY: all test render bench clean
+.PHONY: all test render bench prebuilt clean
 
 all: $(BUILD)/libpearls.so
 
 $(BUILD)/obj/%.o: %.cc
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -MMD -c $< -o $@
+	$(CXX) $(ALL_CXXFLAGS) -MMD -c $< -o $@
 
 $(BUILD)/obj/csound/pearls_opcode.o: csound/pearls_opcode.cc
 	@test -n "$(CSOUND_INCLUDE)" || (echo "Csound headers not found: set CSOUND_INCLUDE"; exit 1)
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(CSOUND_FLAGS) -I$(CSOUND_INCLUDE) -MMD -c $< -o $@
+	$(CXX) $(ALL_CXXFLAGS) $(CSOUND_FLAGS) -I$(CSOUND_INCLUDE) -MMD -c $< -o $@
 
 $(BUILD)/libpearls.so: $(LIB_OBJ) $(BUILD)/obj/csound/pearls_opcode.o
 	$(CXX) -shared $(ARCH_FLAGS) -o $@ $^
@@ -77,6 +80,9 @@ test: $(BUILD)/pearls_test
 render: $(BUILD)/pearls_render
 
 bench: $(BUILD)/pearls_bench
+
+prebuilt:
+	tools/build_prebuilt.sh
 
 clean:
 	rm -rf $(BUILD)
