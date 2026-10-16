@@ -10,13 +10,11 @@ hardware, a Csound plugin opcode runs it, and a Nebulae instrument file maps
 the panel. The upstream README asks derivative works not to use the original
 name, hence "Pearls".
 
-> **Status: first port, not yet tested on a Nebulae.** Everything below has been
-> built and tested on a desktop. That includes Csound running the instrument the
-> way the Nebulae firmware does, and an ARM cross-build of the engine tests. The
-> prebuilt ARM plugin has also passed the full instrument test in an emulated
-> 2018 ARM system (Ubuntu 18.04 armhf: Csound 6.10, glibc 2.27). The first run
-> on real hardware is the next step. See [Testing on the
-> Nebulae](#testing-on-the-nebulae).
+> **Status: working on hardware.** Firmware `v2_1_2-pearls4` installs from a USB
+> stick and runs Pearls on a Nebulae v2 (Raspberry Pi 3, Csound 6.11). That was
+> confirmed in a first round of hands-on testing; longer testing is under way.
+> Behind it: engine tests (desktop and ARM), Csound harnesses (including an
+> emulated 2018 ARM Csound), and a simulator of the Nebulae Python program.
 
 ## What you get
 
