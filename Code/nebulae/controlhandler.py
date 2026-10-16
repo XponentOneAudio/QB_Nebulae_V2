@@ -146,6 +146,25 @@ class ControlHandler(object):
         #GPIO.setup(self.reset_led_pin, GPIO.OUT)
         self.channeldict["filestate"].setIgnoreGate(True)
         self.channeldict["sourcegate"].setIgnoreHID(True)
+        # Instruments that read gate jacks / drive the EOL jack themselves
+        # (e.g. Pearls) declare it in their config chunk:
+        #   ignoregate,freeze,reset  -> those channels follow their button only
+        #   eol,engine               -> Python leaves the EOL output alone
+        #   ui,pearls                -> status channels for Pearls LED feedback
+        self.eol_from_engine = False
+        self.pearls_quality_comm = None
+        self.pearls_seedled_comm = None
+        if self.configData is not None:
+            if self.configData.has_key("ignoregate"):
+                for name in self.configData.get("ignoregate"):
+                    if self.channeldict.has_key(name):
+                        self.channeldict[name].setIgnoreGate(True)
+            if self.configData.has_key("eol"):
+                self.eol_from_engine = self.configData.get("eol")[0] == "engine"
+            if self.configData.has_key("ui") and self.csound is not None:
+                if self.configData.get("ui")[0] == "pearls":
+                    self.pearls_quality_comm = control.CommChannel(self.csound, "pearls_quality")
+                    self.pearls_seedled_comm = control.CommChannel(self.csound, "pearls_seedled")
         # Worker for writing audio file.
         #self.writeThread = threading.Thread(target=self.writeBufferToAudioFile())
         self.writeThread = threading.Thread(target=self.dummyThread())
@@ -338,6 +357,8 @@ class ControlHandler(object):
         return self.eol_state
 
     def handleEndOfLoop(self):
+        if self.eol_from_engine:
+            return
         self.eol_comm.update()
         self.size_status_comm.update()
         if self.size_status_comm.getState() == 0:

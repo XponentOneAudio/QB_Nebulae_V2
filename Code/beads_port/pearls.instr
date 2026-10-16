@@ -1,0 +1,75 @@
+nebconfigbegin
+ksmps,64
+-B,512
+-b,128
+sr,48000
+freeze,latching,rising
+reset,momentary,rising
+source,latching,falling
+file,triggered,falling
+record,latching,rising
+reset_alt,latching,rising
+record_alt,latching,rising
+ignoregate,freeze,reset
+eol,engine
+ui,pearls
+nebconfigend
+
+; Pearls
+; ======
+; Unofficial, non-commercial port of the Mutable Instruments Beads granular
+; processor (DSP by Emilie Gillet, MIT licence) to the Qu-Bit Nebulae v2.
+;
+; Requires the "pearls" Csound opcode (libpearls.so in the Csound plugin
+; directory), built and installed on the Nebulae by
+; QB_Nebulae_V2/Code/beads_port/install.sh. See Code/beads_port/README.md.
+;
+; Primary controls                  Beads equivalent
+;   Start          (+CV)            TIME
+;   Size           (+CV)            SIZE (fully clockwise = delay mode)
+;   Window         (+CV)            SHAPE
+;   Density        (+CV)            DENSITY (12 o'clock = no grains)
+;   Pitch encoder  (+1V/oct)        PITCH
+;   Overlap        (+CV)            FEEDBACK
+;   Blend          (+CV)            DRY/WET
+;   Speed encoder  (+CV)            REVERB (clockwise from speed 0)
+;   Freeze button / gate            FREEZE (gate: frozen while high)
+;   Reset button                    SEED (tap = grain; hold 1.5 s = re-lock)
+;   Reset gate                      SEED input (clock/trigger grains)
+;   Next button / gate              QUALITY: dirty tape, clean tape,
+;                                   vintage digital, digital
+;   Source button / gate            wavetable synth mode on/off
+;   EOL output                      grain / delay tap gate
+;
+; Secondary controls (hold Source)
+;   Start / Size / Window / Pitch   TIME / SIZE / SHAPE / PITCH randomness
+;   Density                         input gain: fully CCW = automatic
+;   Speed                           Nebulae input level (as usual)
+;   Reset                           randomness flavour: off = smooth
+;                                   variations, on = sparse jumps
+;   Record                          mono buffer (left input, twice as long)
+
+gkpearls_quality init 3
+
+instr 1
+ainl, ainr inch 1, 2
+
+; Next (button or gate) steps through the four Beads quality settings.
+knext trigger gkfilesel, 0.5, 0
+if knext == 1 then
+    gkpearls_quality = (gkpearls_quality + 1) % 4
+endif
+
+aL, aR, kgate, kseedled, kreserve pearls ainl, ainr, gkloopstart, gkloopsize, gkwindow, gkdensity, gkpitch, gkspeed, gkoverlap, gkblend, gkloopstart_alt, gkloopsize_alt, gkwindow_alt, gkpitch_alt, gkdensity_alt, gkfreeze, gkreset, gksource, gkpearls_quality, gkrecord_alt, gkreset_alt, 1
+
+outs aL, aR
+
+; Status for the Nebulae user interface.
+chnset gkpearls_quality, "pearls_quality"
+chnset kseedled, "pearls_seedled"
+chnset kreserve, "pearls_reserve"
+gkeol = kgate
+gksizestatus = 0
+gkrecordstatus = 0
+gkbufferlength = 0
+endin

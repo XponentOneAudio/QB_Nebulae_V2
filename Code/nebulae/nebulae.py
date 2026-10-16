@@ -99,7 +99,18 @@ class Nebulae(object):
         else:
             self.c.setOption("-m0")  # Set option for Csound
             self.c.setOption("-d")
-        self.c.compileOrc(self.orc_handle.curOrc)     # Compile Orchestra from String
+        compile_result = self.c.compileOrc(self.orc_handle.curOrc)     # Compile Orchestra from String
+        if compile_result != 0 and not (instr == 'a_granularlooper' and instr_bank == 'factory'):
+            # e.g. a user instrument whose plugin opcode library is missing.
+            # Fall back to the default instrument instead of failing (and
+            # failing again at every boot, since the selection is saved).
+            print "Orchestra for " + instr + " failed to compile. Falling back to a_granularlooper."
+            self.c.reset()
+            self.new_instr = 'a_granularlooper'
+            self.new_bank = 'factory'
+            self.writeBootInstr()
+            self.start(self.new_instr, self.new_bank)
+            return
         self.c.readScore(self.orc_handle.curSco)     # Read in Score generated from notes 
         self.c.start() # Start Csound
         self.c_handle = ch.ControlHandler(self.c, self.orc_handle.numFiles(), configData, self.new_instr, bank=self.new_bank) # Create handler for all csound comm.

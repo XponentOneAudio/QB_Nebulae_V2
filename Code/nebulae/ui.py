@@ -75,6 +75,9 @@ class UserInterface(object):
         self.ignore_next_speed_click = False
         self.clearAllLEDs()
         self.restoreDefaultsFlag = False
+        # Pearls (Beads port) LED feedback state.
+        self.pearls_quality = -1
+        self.pearls_quality_time = 0
 
     def update(self):
         self.now = int(round(time.time() * 1000))
@@ -160,6 +163,8 @@ class UserInterface(object):
 
         self.update_speed(self.mode)
         self.update_pitch(self.mode)
+        if self.mode == "normal":
+            self.update_pearls_leds()
     
     def clearAllLEDs(self):
         self.set_rgb("pitch_pos", 4095, 4095, 4095, 0.0)
@@ -780,6 +785,34 @@ class UserInterface(object):
                 else:
                     self.controlhandler.enterNormalMode()
         self.set_pitch_leds(mode)
+
+    # Pearls (Beads port, see Code/beads_port): the Reset LED shows grain
+    # activity like the Beads seed LED (dim while the generator is locked and
+    # idle), and the encoder LEDs show the Beads quality colour for 1.5 s
+    # after it changes. Only active for instruments with "ui,pearls" config.
+    def update_pearls_leds(self):
+        ch = self.controlhandler
+        if getattr(ch, "pearls_quality_comm", None) is None:
+            return
+        ch.pearls_quality_comm.update()
+        ch.pearls_seedled_comm.update()
+        seed = ch.pearls_seedled_comm.getState()
+        if seed >= 1.0:
+            self.set_button_led("reset", 1.0)
+        elif seed > 0.0:
+            self.set_button_led("reset", 0.15)
+        else:
+            self.set_button_led("reset", 0.0)
+        quality = int(ch.pearls_quality_comm.getState()) % 4
+        if quality != self.pearls_quality:
+            self.pearls_quality = quality
+            self.pearls_quality_time = self.now
+        if self.now - self.pearls_quality_time < 1500:
+            # Beads quality palette: dirty tape, clean tape, vintage, digital.
+            palette = [(2048, 0, 768), (4095, 2304, 0), (0, 4095, 3072), (3072, 3072, 3328)]
+            r, g, b = palette[quality]
+            for name in ["speed_pos", "speed_neg", "pitch_pos", "pitch_neg"]:
+                self.set_rgb(name, r, g, b)
 
     def set_rgb(self, name, r, g, b, bright=1.0):
         self.ledDriver.set_rgb(name, r, g, b, bright)       

@@ -1,6 +1,28 @@
 # Porting Mutable Instruments Beads to Qu-Bit Nebulae v2
 
-Status: design proposal / feasibility study. No firmware changes yet.
+Status: phase 1 implemented as **Pearls**. See [README.md](README.md) for the
+panel, installation and testing. This document is the original proposal.
+Where phase 1 differs from it:
+
+- The opcode is `pearls` and the instrument is `pearls.instr`. The upstream
+  README asks derivative works not to reuse the module name.
+- `libpearls.so` is installed into Csound's plugin directory. `--opcode-lib`
+  does not work through the API as Nebulae uses it: the orchestra is compiled
+  before `csound.start()`, but option libraries are loaded at start.
+- Seed lock follows Beads exactly (tap Reset to unlock, hold 1.5 s to
+  re-lock), so the Record button is free. Mono is on Record (secondary), the
+  randomness flavour on Reset (secondary) and manual gain on Density
+  (secondary).
+- The randomness knobs use only the clockwise half of the Beads attenuverter
+  law, because Nebulae secondary knobs default to 0. The flavour switch
+  gives the counter-clockwise behaviour.
+- Gates are polled from `/dev/gpiomem` once per control period. libgpiod with
+  edge timestamps is left for later. The EOL output is pulse-stretched in
+  wall-clock time because Csound renders in bursts.
+- Beads `Processor`/`Synth` got an optional gate-output sink. That makes two
+  small upstream edits (see `third_party/eurorack/UPSTREAM.md`).
+- No-input detection (below −60 dBFS for 2 s) replaces Beads' normalisation
+  probe for the AGC.
 
 ## 1. Summary
 
