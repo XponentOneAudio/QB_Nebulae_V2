@@ -1,6 +1,6 @@
 # Pearls: Mutable Instruments Beads DSP ported to the Qu-Bit Nebulae v2.
 #
-#   make              Csound opcode library  build/libpearls.so
+#   make              Csound opcode library  build/libpearls.so (.dylib on macOS)
 #   make test         build and run the engine tests
 #   make render       desktop renderer       build/pearls_render
 #   make bench        CPU benchmark          build/pearls_bench
@@ -13,8 +13,20 @@
 
 CXX ?= g++
 BUILD ?= build
-CSOUND_INCLUDE ?= $(firstword $(wildcard /usr/local/include/csound /usr/include/csound))
+CSOUND_INCLUDE ?= $(firstword $(wildcard /usr/local/include/csound /usr/include/csound \
+	/Library/Frameworks/CsoundLib64.framework/Headers \
+	/opt/homebrew/include/csound /usr/local/opt/csound/include/csound))
 CSOUND_DOUBLE ?= 1
+
+# Csound plugin library: .dylib on macOS (for the Qu-Bit Instr Tester on a
+# Mac), .so elsewhere.
+ifeq ($(shell uname -s),Darwin)
+  PLUGIN = $(BUILD)/libpearls.dylib
+  SHARED_FLAGS = -dynamiclib -undefined dynamic_lookup
+else
+  PLUGIN = $(BUILD)/libpearls.so
+  SHARED_FLAGS = -shared
+endif
 
 TARGET_MACHINE := $(shell $(CXX) -dumpmachine)
 ifneq (,$(filter arm%,$(TARGET_MACHINE)))
@@ -51,7 +63,7 @@ endif
 
 .PHONY: all test render bench prebuilt clean
 
-all: $(BUILD)/libpearls.so
+all: $(PLUGIN)
 
 $(BUILD)/obj/%.o: %.cc
 	@mkdir -p $(dir $@)
@@ -62,8 +74,8 @@ $(BUILD)/obj/csound/pearls_opcode.o: csound/pearls_opcode.cc
 	@mkdir -p $(dir $@)
 	$(CXX) $(ALL_CXXFLAGS) $(CSOUND_FLAGS) -I$(CSOUND_INCLUDE) -MMD -c $< -o $@
 
-$(BUILD)/libpearls.so: $(LIB_OBJ) $(BUILD)/obj/csound/pearls_opcode.o
-	$(CXX) -shared $(ARCH_FLAGS) -o $@ $^
+$(PLUGIN): $(LIB_OBJ) $(BUILD)/obj/csound/pearls_opcode.o
+	$(CXX) $(SHARED_FLAGS) $(ARCH_FLAGS) -o $@ $^
 
 $(BUILD)/pearls_test: $(LIB_OBJ) $(BUILD)/obj/tools/pearls_test.o
 	$(CXX) $(ARCH_FLAGS) -o $@ $^

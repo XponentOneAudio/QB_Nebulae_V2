@@ -154,6 +154,42 @@ All are inactive for other instruments:
   back to the Granular Looper instead of failing at every boot.
 - `scripts/startup.sh`: runs `boot_install.sh`.
 
+## Trying it on a computer with the Qu-Bit Instr Tester
+
+Qu-Bit's [Instr Tester](https://www.qubitelectronix.com/alternate-firmware/p/p6o97gn5ox514np90lisz29gxzikqx)
+(also in this repo as `Instruments/Instr Tester/Neb_Instr_Tester.zip`) runs
+`.instr` files on a Mac or Linux computer, with sliders in place of the knobs.
+It needs Python 2.7, NumPy, Tkinter and Csound 6. Pearls also needs its plugin
+built for your computer:
+
+1. Install Csound 6 with its headers. On Debian/Ubuntu that's `csound` and
+   `libcsound64-dev`. On a Mac, install the Csound package; you also need
+   Xcode's command-line tools.
+2. Build the plugin: `make` in this folder. This gives `build/libpearls.so`,
+   or `build/libpearls.dylib` on a Mac. The Mac build is untested.
+3. Copy the plugin into Csound's plugin directory. On Linux that's
+   `/usr/lib/x86_64-linux-gnu/csound/plugins64-6.0` or
+   `/usr/local/lib/csound/plugins64-6.0`. On a Mac it's
+   `/Library/Frameworks/CsoundLib64.framework/Versions/6.0/Resources/Opcodes64`.
+   The tester, like the module, compiles the orchestra before starting Csound,
+   so an `--opcode-lib` option would not work.
+4. Copy `pearls.instr` into the tester's `instr/` folder. Then, in the tester
+   folder, run `python instr_tester/nebulae.py pearls`.
+
+In the tester:
+- **Next** steps the quality on each press, except when the tester's file
+  index wraps around. Put a few audio files in its `audio/` folder; with
+  fewer than two, Next does nothing.
+- **Reset** is a short tap, so it seeds grains and unlocks the generator.
+  Holding it to re-lock isn't possible there.
+- **Secondary buttons** (mono buffer, randomness flavour) aren't available yet.
+- **Gate jacks and the EOL output** don't exist on a computer. A
+  `GPIO gate access unavailable` warning is expected.
+
+`tools/csound_harness.py --conductor <tester>/instr_tester/conductor.py
+--next-style increment` checks `pearls.instr` against the tester's orchestra
+header without the GUI.
+
 ## Testing on the Nebulae
 
 Things to check on the first run. The commands need SSH; the listening tests

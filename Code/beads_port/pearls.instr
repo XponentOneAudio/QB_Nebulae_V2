@@ -53,9 +53,13 @@ gkpearls_quality init 3
 
 instr 1
 ainl, ainr inch 1, 2
+kprevfile init 0
 
 ; Next (button or gate) steps through the four Beads quality settings.
-knext trigger gkfilesel, 0.5, 0
+; Counts increases of the "file" channel: the Nebulae sends 0/1 pulses, the
+; Qu-Bit Instr Tester an incrementing file index. (No if/then: see README.)
+knext = limit(gkfilesel - kprevfile, 0, 1)
+kprevfile = gkfilesel
 gkpearls_quality = (gkpearls_quality + knext) % 4
 
 aL, aR, kgate, kseedled, kreserve pearls ainl, ainr, gkloopstart, gkloopsize, gkwindow, gkdensity, gkpitch, gkspeed, gkoverlap, gkblend, gkloopstart_alt, gkloopsize_alt, gkwindow_alt, gkpitch_alt, gkdensity_alt, gkfreeze, gkreset, gksource, gkpearls_quality, gkrecord_alt, gkreset_alt, 1
@@ -69,5 +73,4 @@ chnset kreserve, "pearls_reserve"
 gkeol = kgate
 gksizestatus = 0
 gkrecordstatus = 0
-gkbufferlength = 0
 endin

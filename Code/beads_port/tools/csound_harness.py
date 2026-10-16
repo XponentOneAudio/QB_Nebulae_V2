@@ -73,8 +73,8 @@ def parse_instr(path):
     return config, "".join(orc)
 
 
-def nebulae_orc_header():
-    with open(os.path.join(CODE, "nebulae", "conductor.py")) as f:
+def nebulae_orc_header(conductor):
+    with open(conductor) as f:
         source = f.read()
     match = re.search(r'self\.orcheader = """(.*?)"""', source, re.S)
     return match.group(1)
@@ -110,6 +110,12 @@ def main():
     parser.add_argument("--out", default=None)
     parser.add_argument("--csound", default="csound")
     parser.add_argument("--plugin-dir", default=None)
+    parser.add_argument("--conductor", default=os.path.join(CODE, "nebulae", "conductor.py"),
+                        help="conductor.py to take the orchestra header from, e.g. the "
+                             "Qu-Bit Instr Tester's instr_tester/conductor.py")
+    parser.add_argument("--next-style", choices=["pulse", "increment"], default="pulse",
+                        help="how Next changes gkfilesel: 0/1 pulses (Nebulae) or an "
+                             "incrementing file index (Instr Tester)")
     parser.add_argument("--no-chnexport", action="store_true",
                         help="declare the control globals with init instead of chnexport "
                              "(Ubuntu 18.04's armhf Csound 6.10 crashes on chnexport under qemu)")
@@ -125,15 +131,28 @@ def main():
     # One tiny instrument per timeline event, started from the score, so the
     # driver needs no conditionals (if/then crashes the armhf Csound 6.10 of
     # Ubuntu 18.04 under qemu).
+    timeline = TIMELINE
+    if args.next_style == "increment":
+        # Instr Tester: Next increments the file index instead of pulsing.
+        timeline, index = [], 0
+        for t, chn, value in TIMELINE:
+            if chn == "gkfilesel":
+                if value == 0:
+                    continue
+                index += 1
+                value = index
+            timeline.append((t, chn, value))
     driver, events = [], []
-    for n, (t, chn, value) in enumerate(TIMELINE):
+    for n, (t, chn, value) in enumerate(timeline):
         driver.append("\ninstr %d\n%s init %s\nendin\n" % (100 + n, chn, value))
         events.append("i%d %f 0.001\n" % (100 + n, t))
-    header = nebulae_orc_header()
+    # Report the quality setting twice a second, to check that Next steps it.
+    driver.append('\ninstr 98\nprintks "PEARLS_QUALITY %d\\n", 0.5, gkpearls_quality\nendin\n')
+    header = nebulae_orc_header(args.conductor)
     if args.no_chnexport:
         header = re.sub(r"(gk\w+)\s+chnexport\s+\"\w+\",\s*\d", r"\1 init 0", header)
     orc = preamble + header + "\nginumfiles init 0\n" + instr + "".join(driver)
-    sco = "".join(events) + "i1 0.01 %f\n" % DURATION
+    sco = "".join(events) + "i1 0.01 %f\ni98 0.01 %f\n" % (DURATION, DURATION)
 
     with open(os.path.join(tmp, "test.orc"), "w") as f:
         f.write(orc)
@@ -160,6 +179,13 @@ def main():
 
     samples, ch, sr = read_output(out)
     ok = True
+    # Next at 3 s and 5 s: digital (3) -> dirty tape (0) -> clean tape (1).
+    qualities = [int(q) for q in re.findall(r"PEARLS_QUALITY (\d+)", log)]
+    steps = [q for i, q in enumerate(qualities) if i == 0 or q != qualities[i - 1]]
+    print("  quality sequence: %s" % steps)
+    if steps != [3, 0, 1]:
+        ok = False
+        print("  FAIL: Next should step quality 3 -> 0 -> 1")
     def rms(t0, t1):
         a, b = int(t0 * sr) * ch, int(t1 * sr) * ch
         seg = samples[a:b]
