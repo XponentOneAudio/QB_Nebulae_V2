@@ -1,4 +1,4 @@
-# Nebulae v2 firmware v2_1_2-pearls2
+# Nebulae v2 firmware v2_1_2-pearls3
 
 Official firmware v2.1.2 plus **Pearls**, an unofficial port of the Mutable
 Instruments Beads granular processor. See `Code/beads_port/README.md`.

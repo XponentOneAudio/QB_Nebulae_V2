@@ -1,6 +1,6 @@
 #!/bin/bash
 # Makes the Nebulae firmware update with Pearls:
-#   FirmwareUpdates/v_2_1_2_pearls2/neb_update.zip
+#   FirmwareUpdates/v_2_1_2_pearls3/neb_update.zip
 #
 # Starts from the official v2.1.2 update (FirmwareUpdates/v_2_1_2) and
 # overlays only the files this branch changes or adds under Code/, with
@@ -14,7 +14,7 @@
 set -e
 REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 OFFICIAL="$REPO/FirmwareUpdates/v_2_1_2/neb_update.zip"
-OUT_DIR="$REPO/FirmwareUpdates/v_2_1_2_pearls2"
+OUT_DIR="$REPO/FirmwareUpdates/v_2_1_2_pearls3"
 BASE=$(git -C "$REPO" merge-base HEAD master)
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

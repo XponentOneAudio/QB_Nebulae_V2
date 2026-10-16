@@ -78,12 +78,15 @@ if ! command -v g++ >/dev/null 2>&1; then
 fi
 
 # The Nebulae runs Csound in double precision (libcsound64); check anyway.
+# Capture the whole output first: Csound 6.10/6.11 spins forever if its
+# output pipe is closed early (e.g. by grep -q or grep -m1).
 CSOUND_DOUBLE=1
 if command -v csound >/dev/null 2>&1; then
-    if csound --version 2>&1 | grep -q "float samples"; then
+    CSOUND_VERSION=$(timeout -k 5 20 csound --version < /dev/null 2>&1)
+    if echo "$CSOUND_VERSION" | grep -q "float samples"; then
         CSOUND_DOUBLE=0
     fi
-    echo "Csound: $(csound --version 2>&1 | grep -m1 -i 'csound version')"
+    echo "Csound: $(echo "$CSOUND_VERSION" | grep -m1 -i 'csound version')"
 fi
 
 echo "Building (this takes a few minutes on the Nebulae)..."

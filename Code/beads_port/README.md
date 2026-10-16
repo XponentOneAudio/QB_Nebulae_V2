@@ -89,7 +89,7 @@ selector.
 ## Installing with a USB stick (no SSH)
 
 This uses the Nebulae's normal firmware-update mechanism. The update is the
-official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls2`).
+official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls3`).
 
 > **Check your hardware first.** This firmware is for Nebulae v2 units with a
 > **Raspberry Pi 3** on the back. A Pi 3 has full-size HDMI and a micro-USB
@@ -98,7 +98,7 @@ official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls2`).
 
 1. Copy `neb_update.zip` to the **root of your USB stick**. Your audio files
    and instruments can stay on it. Get the file from
-   `FirmwareUpdates/v_2_1_2_pearls2/` in this repository, or make it with
+   `FirmwareUpdates/v_2_1_2_pearls3/` in this repository, or make it with
    `./create_fw_update.sh`.
 2. With the stick inserted, power the Nebulae on. It installs the update
    (the LEDs show the update animation) and reboots by itself. It removes
@@ -115,11 +115,17 @@ What happens on the module:
   into Csound's plugin directory.
 - It checks that the plugin really loads and runs in the module's own Csound
   (`tools/verify_plugin.py`).
-- It runs as the `alarm` user, like the other boot scripts, and uses `sudo`
-  for the privileged steps. A copy of the log stays on the module in
+- The plugin is checked in a temporary folder first, so an unverified plugin
+  never sits in Csound's plugin folder, where every instrument would load it.
+- Every step has a time limit, and `startup.sh` caps the whole installer at
+  3 minutes. Versions 1 and 2 froze the boot (steady white LEDs): Csound 6.11
+  on the module spins forever when its output pipe is closed early, and the
+  installer ran `csound --version | grep -m1`. Version 3 makes no Csound
+  command-line calls.
+- A copy of the log stays on the module in
   `/home/alarm/pearls/install_log.txt`.
-- If the check fails and the module has a compiler, it compiles the plugin
-  there instead.
+- If the check fails, it doesn't compile on the module (no swap, 1 GB of
+  RAM). Use the SSH install instead.
 - It never stops the Nebulae from booting, and it doesn't retry a failed
   install until new firmware arrives.
 - If your stick holds other `.instr` files, it also copies `pearls.instr`

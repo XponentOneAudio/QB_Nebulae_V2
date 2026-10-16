@@ -1,21 +1,28 @@
 #!/bin/bash
 # Installs Pearls at boot, from the firmware itself: no SSH needed.
 #
-# Called by Code/scripts/startup.sh before Nebulae starts. After a firmware
-# update containing a new prebuilt plugin it:
-#   1. copies prebuilt/armv7/libpearls.so into the Csound plugin directory,
-#   2. checks that it loads and runs in this Csound (tools/verify_plugin.py),
-#      and if not, tries to compile it on the module (only if g++ is there),
-#   3. installs pearls.instr into the user instrument bank,
-#   4. writes pearls_install_log.txt to the USB stick, and copies pearls.instr
-#      to the stick if the stick holds other .instr files (Nebulae replaces
-#      the user bank with the stick's instruments).
-# On every other boot it only checks a marker file and exits.
+# Called by Code/scripts/startup.sh (under an overall time limit) before
+# Nebulae starts. After a firmware update containing a new prebuilt plugin:
+#   1. checks the prebuilt plugin in a temporary plugin directory: it must
+#      load and run in this module's Csound (tools/verify_plugin.py);
+#   2. only then copies it into the Csound plugin directory, and installs
+#      pearls.instr into the user instrument bank;
+#   3. writes pearls_install_log.txt to the USB stick (and a copy to
+#      /home/alarm/pearls/install_log.txt), and copies pearls.instr to the
+#      stick if the stick holds other .instr files (Nebulae replaces the user
+#      bank with the stick's instruments).
+# A failed check is not retried until a new firmware arrives. On every other
+# boot it only checks a marker file and exits.
 #
-# It never stops Nebulae from booting: any failure is logged and skipped.
-#
-# The Nebulae boot scripts run as the "alarm" user and use sudo for
-# privileged steps (see scripts/update.sh); so does this script.
+# Rules that keep this script from ever blocking the boot:
+#   - stdin is /dev/null for everything;
+#   - every external command is time limited and force-killed (timeout -k);
+#   - no `csound` command-line calls: Csound 6.10/6.11 spins forever when its
+#     output pipe is closed early (e.g. `csound --version | grep -m1`), which
+#     froze the boot with installer versions 1 and 2;
+#   - no compiling on the module (no swap, 1 GB RAM): use install.sh over SSH.
+
+exec < /dev/null
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 PREBUILT="$HERE/prebuilt/armv7/libpearls.so"
@@ -27,16 +34,23 @@ USB_DEV=/dev/sda1
 USB_DIR=/mnt/memory
 # Bump when this script changes, so that a failure recorded by an older
 # version is retried.
-INSTALLER_VERSION=2
+INSTALLER_VERSION=3
 
 if [ "$(id -u)" = "0" ]; then
     SUDO=""
 else
-    SUDO="sudo"
+    SUDO="sudo -n"
 fi
 
+# t SECONDS COMMAND...: run with a hard time limit.
+t() {
+    local secs=$1
+    shift
+    timeout -k 5 "$secs" "$@"
+}
+
 [ -f "$PREBUILT" ] || exit 0
-WANTED="prebuilt $(sha256sum "$PREBUILT" | cut -d ' ' -f 1) installer $INSTALLER_VERSION"
+WANTED="prebuilt $(t 20 sha256sum "$PREBUILT" | cut -d ' ' -f 1) installer $INSTALLER_VERSION"
 
 find_plugin_dir() {
     local d
@@ -47,7 +61,7 @@ find_plugin_dir() {
             return
         fi
     done
-    find /usr /opt -type d -name 'plugins64-6.0' 2>/dev/null | head -n 1
+    t 60 find /usr /opt -type d -name 'plugins64-6.0' 2>/dev/null | head -n 1
 }
 PLUGIN_DIR=$(find_plugin_dir)
 
@@ -57,10 +71,10 @@ INSTALLED=$(cat "$MARKER" 2>/dev/null)
 if [ -n "$PLUGIN_DIR" ] && [ -f "$PLUGIN_DIR/libpearls.so" ] &&
    { [ "$INSTALLED" = "$WANTED" ] || [ "$INSTALLED" = "local-build" ]; }; then
     if [ ! -f "$INSTR_DIR/pearls.instr" ]; then
-        sh "$MOUNTFS" rw
+        t 30 sh "$MOUNTFS" rw
         mkdir -p "$INSTR_DIR" && cp "$HERE/pearls.instr" "$INSTR_DIR/"
         sync
-        sh "$MOUNTFS" ro
+        t 30 sh "$MOUNTFS" ro
     fi
     exit 0
 fi
@@ -69,72 +83,62 @@ if [ "$INSTALLED" = "failed $WANTED" ]; then
     exit 0
 fi
 
+LOG=$(mktemp /tmp/pearls_install_log.XXXXXX)
 log() {
     echo "$*"
     echo "$*" >> "$LOG"
 }
 
-verify() {
-    timeout 120 python2 "$HERE/tools/verify_plugin.py" >> "$LOG" 2>&1
-}
-
-# Copies a plugin into the Csound plugin directory (owned by root).
-install_plugin() {
-    $SUDO cp "$1" "$PLUGIN_DIR/libpearls.so" >> "$LOG" 2>&1 &&
-        $SUDO chmod 755 "$PLUGIN_DIR/libpearls.so" >> "$LOG" 2>&1 &&
-        sync
-}
-
-LOG=$(mktemp /tmp/pearls_install_log.XXXXXX)
 log "Pearls install - $(date)"
 log "firmware: $(grep VERSION= /home/alarm/QB_Nebulae_V2/Code/config.txt 2>/dev/null | head -n 1)"
-log "plugin: $(cat "$HERE/prebuilt/armv7/BUILD_INFO.txt" 2>/dev/null | grep -E 'commit|sha256' | tr '\n' ' ')"
-log "csound: $(csound --version 2>&1 | grep -m1 -i 'csound version')"
+log "plugin: $(grep -E 'commit|sha256' "$HERE/prebuilt/armv7/BUILD_INFO.txt" 2>/dev/null | tr '\n' ' ')"
 log "installer: version $INSTALLER_VERSION, running as $(id -un)"
 
-sh "$MOUNTFS" rw
+t 30 sh "$MOUNTFS" rw > /dev/null 2>&1
 
 RESULT=fail
 if [ -z "$PLUGIN_DIR" ]; then
     log "ERROR: Csound plugin directory (plugins64-6.0) not found."
 else
     log "Csound plugin directory: $PLUGIN_DIR"
-    if ! install_plugin "$PREBUILT"; then
-        log "ERROR: could not copy the plugin to $PLUGIN_DIR (details above)."
-    fi
-    if verify; then
-        RESULT=ok
-        mkdir -p "$STATE_DIR" && echo "$WANTED" > "$MARKER"
-        log "Prebuilt plugin installed and verified."
-    else
-        log "The prebuilt plugin did not pass the check (details above)."
-        if command -v g++ >/dev/null 2>&1; then
-            log "Compiling Pearls on the module instead (this takes several minutes)..."
-            rm -rf "$HERE/build"
-            if timeout 1800 make -C "$HERE" -j4 >> "$LOG" 2>&1 &&
-               install_plugin "$HERE/build/libpearls.so" && verify; then
-                RESULT=ok
-                mkdir -p "$STATE_DIR" && echo "local-build" > "$MARKER"
-                log "Compiled plugin installed and verified."
-            else
-                log "ERROR: compiling on the module failed too."
-            fi
+    # Check the plugin on its own first (OPCODE6DIR64 = a temporary directory
+    # holding only libpearls.so; the check orchestra only needs core opcodes).
+    CHECK_DIR=$(mktemp -d /tmp/pearls_check.XXXXXX)
+    cp "$PREBUILT" "$CHECK_DIR/libpearls.so"
+    log "Checking the plugin in this Csound..."
+    t 90 python2 "$HERE/tools/verify_plugin.py" "$CHECK_DIR" >> "$LOG" 2>&1
+    STATUS=$?
+    rm -rf "$CHECK_DIR"
+    if [ $STATUS = 0 ]; then
+        if t 30 $SUDO cp "$PREBUILT" "$PLUGIN_DIR/libpearls.so" >> "$LOG" 2>&1 &&
+           t 10 $SUDO chmod 644 "$PLUGIN_DIR/libpearls.so" >> "$LOG" 2>&1; then
+            sync
+            RESULT=ok
+            mkdir -p "$STATE_DIR" && echo "$WANTED" > "$MARKER"
+            log "Plugin verified and installed."
         else
-            log "No compiler on the module (g++), so it cannot be compiled here."
+            t 10 $SUDO rm -f "$PLUGIN_DIR/libpearls.so"
+            log "ERROR: could not copy the plugin to $PLUGIN_DIR (details above)."
         fi
-        if [ $RESULT != ok ]; then
-            $SUDO rm -f "$PLUGIN_DIR/libpearls.so"
-            # Remember the failure for this prebuilt so the next boot does
-            # not retry (and slow down) until a new firmware arrives.
-            mkdir -p "$STATE_DIR" && echo "failed $WANTED" > "$MARKER"
+    else
+        if [ $STATUS -ge 124 ]; then
+            log "ERROR: the plugin check did not finish in time (status $STATUS)."
+        else
+            log "ERROR: the plugin check failed (status $STATUS, details above)."
         fi
+        log "To build Pearls on the module instead, use install.sh over SSH."
+    fi
+    if [ $RESULT != ok ]; then
+        # Remember the failure for this prebuilt so the next boot does not
+        # retry until a new firmware arrives.
+        mkdir -p "$STATE_DIR" && echo "failed $WANTED" > "$MARKER"
     fi
 fi
 
 if [ $RESULT = ok ]; then
     mkdir -p "$INSTR_DIR" && cp "$HERE/pearls.instr" "$INSTR_DIR/"
     log "Instrument installed: $INSTR_DIR/pearls.instr"
-    log "Select it with the instrument selector (hold the Speed encoder), user bank."
+    log "Select it with the instrument selector, user bank (see README)."
 else
     rm -f "$INSTR_DIR/pearls.instr"
     log "Pearls is NOT installed. Nebulae works as before."
@@ -144,17 +148,28 @@ fi
 mkdir -p "$STATE_DIR" && cp "$LOG" "$STATE_DIR/install_log.txt"
 
 # Report on the USB stick.
-if $SUDO mount "$USB_DEV" "$USB_DIR" 2>/dev/null || grep -q " $USB_DIR " /proc/mounts; then
+MOUNTED_HERE=0
+if grep -q " $USB_DIR " /proc/mounts; then
+    USB_OK=1
+elif t 20 $SUDO mount "$USB_DEV" "$USB_DIR" 2>/dev/null; then
+    USB_OK=1
+    MOUNTED_HERE=1
+else
+    USB_OK=0
+fi
+if [ $USB_OK = 1 ]; then
     if [ $RESULT = ok ] && ls "$USB_DIR"/*.instr >/dev/null 2>&1; then
-        $SUDO cp "$HERE/pearls.instr" "$USB_DIR/"
-        log "Copied pearls.instr to the USB stick (it holds other instruments)."
+        t 20 $SUDO cp "$HERE/pearls.instr" "$USB_DIR/"
+        echo "Copied pearls.instr to the USB stick (it holds other instruments)." >> "$LOG"
     fi
-    $SUDO cp "$LOG" "$USB_DIR/pearls_install_log.txt"
+    t 20 $SUDO cp "$LOG" "$USB_DIR/pearls_install_log.txt"
     sync
-    $SUDO umount "$USB_DEV" 2>/dev/null
+    if [ $MOUNTED_HERE = 1 ]; then
+        t 20 $SUDO umount "$USB_DEV" 2>/dev/null
+    fi
 fi
 
 rm -f "$LOG"
 sync
-sh "$MOUNTFS" ro
+t 30 sh "$MOUNTFS" ro > /dev/null 2>&1
 exit 0
