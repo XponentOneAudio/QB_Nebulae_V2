@@ -50,10 +50,8 @@ run() {
     shift
     say "\$ $*"
     local output
-    output=$(timeout -k 5 "$secs" "$@" < /dev/null 2>&1 | tail -n 60)
-    local status=${PIPESTATUS[0]}
-    say "$output"
-    say "[exit status $status]"
+    output=$(timeout -k 5 "$secs" "$@" < /dev/null 2>&1; echo "[exit status $?]")
+    say "$(echo "$output" | tail -n 61)"
     say ""
 }
 
