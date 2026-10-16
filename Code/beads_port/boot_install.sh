@@ -34,7 +34,7 @@ USB_DEV=/dev/sda1
 USB_DIR=/mnt/memory
 # Bump when this script changes, so that a failure recorded by an older
 # version is retried.
-INSTALLER_VERSION=3
+INSTALLER_VERSION=4
 
 if [ "$(id -u)" = "0" ]; then
     SUDO=""
@@ -66,11 +66,11 @@ find_plugin_dir() {
 PLUGIN_DIR=$(find_plugin_dir)
 
 # Fast path: this prebuilt is already installed (or a local build from
-# install.sh, which takes precedence), and so is the instrument.
+# install.sh, which takes precedence), and so is this firmware's instrument.
 INSTALLED=$(cat "$MARKER" 2>/dev/null)
 if [ -n "$PLUGIN_DIR" ] && [ -f "$PLUGIN_DIR/libpearls.so" ] &&
    { [ "$INSTALLED" = "$WANTED" ] || [ "$INSTALLED" = "local-build" ]; }; then
-    if [ ! -f "$INSTR_DIR/pearls.instr" ]; then
+    if ! cmp -s "$HERE/pearls.instr" "$INSTR_DIR/pearls.instr"; then
         t 30 sh "$MOUNTFS" rw
         mkdir -p "$INSTR_DIR" && cp "$HERE/pearls.instr" "$INSTR_DIR/"
         sync

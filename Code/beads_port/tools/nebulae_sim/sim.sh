@@ -14,6 +14,8 @@
 #   NEBSIM_SWITCH_TO=bank/instr  select that instrument at run time
 #   NEBSIM_SWITCH_AFTER=seconds  when (default 8)
 #   NEBSIM_CRASH_INSTR=name      inject a crash when starting that instrument
+#   NEBSIM_SET="name=value ..."  set control channels after NEBSIM_SET_AFTER s
+#   NEBSIM_KEEP_LOG=1            keep the full log when the run passes
 #   NEBSIM_RESTARTS=n            restart Nebulae up to n times when it exits
 #                                (systemd Restart=on-failure); /tmp is kept
 #                                between restarts, as on the module
@@ -35,14 +37,16 @@ LOG=$(mktemp /tmp/nebsim_log.XXXXXX)
 
 PLUGIN_DIR=$(find /usr/local/lib /usr/lib -type d -name 'plugins64-6.0' 2>/dev/null | head -n 1)
 
-rm -rf /home/alarm/QB_Nebulae_V2
+rm -rf /home/alarm/QB_Nebulae_V2 /home/alarm/instr
 mkdir -p /home/alarm /home/alarm/audio /home/alarm/instr /home/alarm/pd /mnt/memory
 tar -xzf "$FIRMWARE" -C /home/alarm
 # mountfs.sh would remount the desktop's root file system.
 printf '#!/bin/bash\necho "[sim mountfs $1]"\n' > /home/alarm/QB_Nebulae_V2/Code/scripts/mountfs.sh
 printf 'bank,%s\ninstr,%s\n' "$BANK" "$INSTR" > /home/alarm/QB_Nebulae_V2/Code/config/bootinstr.txt
-if [ "$BANK" = "user" ]; then
-    cp "/home/alarm/QB_Nebulae_V2/Code/beads_port/$INSTR.instr" /home/alarm/instr/ 2>/dev/null
+# As boot_install.sh does: the firmware's pearls.instr goes into the user
+# bank (the user bank starts empty on every run).
+if [ -f /home/alarm/QB_Nebulae_V2/Code/beads_port/pearls.instr ]; then
+    cp /home/alarm/QB_Nebulae_V2/Code/beads_port/pearls.instr /home/alarm/instr/
 fi
 rm -f "$PLUGIN_DIR/libpearls.so"
 if [ -n "$PLUGIN" ]; then
@@ -65,6 +69,8 @@ while true; do
         break
     fi
     RUN=$((RUN + 1))
+    # The selector / knob actions happened once, in the first run.
+    unset NEBSIM_SWITCH_TO NEBSIM_SET
     echo "NEBSIM: Nebulae exited with status $STATUS, restarting (like systemd)" >> "$LOG"
 done
 pkill -f /home/alarm/QB_Nebulae_V2/Code/nebulae/bootleds.py 2>/dev/null
@@ -79,7 +85,11 @@ echo "--- start attempts: $(cat /tmp/nebulae_start_attempts 2>/dev/null)"
 echo "--- exit status $STATUS (124 = still running when stopped), restarts: $RUN"
 if [ $STATUS = 124 ] && { [ -n "${NEBSIM_CRASH_INSTR:-}" ] || ! grep -q "Traceback" "$LOG"; }; then
     echo "SIM PASS: $BANK/$INSTR kept running for $SECONDS_TO_RUN s"
-    rm -f "$LOG"
+    if [ -n "${NEBSIM_KEEP_LOG:-}" ] || [ $RUN -gt 0 ]; then
+        echo "full log: $LOG"
+    else
+        rm -f "$LOG"
+    fi
     exit 0
 fi
 echo "SIM FAIL: $BANK/$INSTR (full log: $LOG)"

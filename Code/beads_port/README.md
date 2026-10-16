@@ -161,6 +161,13 @@ All are inactive for other instruments:
 - `ui.py`: Pearls LED feedback (`ui,pearls`).
 - `nebulae.py`: if an instrument's orchestra fails to compile, Nebulae falls
   back to the Granular Looper instead of failing at every boot.
+- `nebulae.py`: an instrument chosen with the selector is saved as the boot
+  instrument only once it has started. If Nebulae dies twice in a row
+  before an instrument has run for 20 s, it starts the Granular Looper.
+  (Counted in `/tmp`, which survives a service restart but not a reboot.)
+- `settings.py`: fixes a crash (`UnboundLocalError: new_val`) when an
+  instrument's config chunk gives a secondary (`_alt`) control a non-numeric
+  value. An early `pearls.instr` did that, which crashed the module in a loop.
 - `scripts/startup.sh`: runs `boot_install.sh`.
 
 ## Trying it on a computer with the Qu-Bit Instr Tester
@@ -255,6 +262,29 @@ python3 tools/csound_harness.py --no-chnexport --plugin-dir prebuilt/armv7 \
 
 `tools/verify_plugin.py [plugin_dir]` is the load-and-run check used on the
 module at boot.
+
+### Simulating the Nebulae
+
+`tools/nebulae_sim/sim.sh` runs the real Nebulae program (`Code/nebulae`,
+Python 2.7) from a firmware update file on a desktop. The GPIO, SPI ADCs and
+LED driver are faked, and Csound uses its null audio driver. It can boot
+any instrument, switch instruments at run time as the selector does, set
+controls, inject crashes, and restart Nebulae as systemd does. Run it as root
+(it writes `/home/alarm`):
+
+```sh
+# Python 2.7 + NumPy 1.14 (the module's versions), e.g. with micromamba:
+micromamba create -p ~/py27 -c conda-forge python=2.7 numpy=1.14
+export PYTHON2=~/py27/bin/python
+make                                    # desktop build of the plugin
+S=tools/nebulae_sim/sim.sh FW=../../FirmwareUpdates/v_2_1_2_pearls4/neb_update.zip
+$S $FW user pearls 30 build/libpearls.so                       # boot into Pearls
+NEBSIM_SWITCH_TO=user/pearls $S $FW factory a_granularlooper 40 build/libpearls.so
+NEBSIM_SET="source=1" NEBSIM_KEEP_LOG=1 $S $FW user pearls 20 build/libpearls.so
+NEBSIM_RESTARTS=4 NEBSIM_CRASH_INSTR=pearls $S $FW user pearls 30  # boot-loop net
+```
+
+The comment at the top of `sim.sh` lists the options.
 
 ## Layout
 

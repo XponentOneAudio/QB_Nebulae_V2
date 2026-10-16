@@ -70,6 +70,28 @@ def switcher():
     app.ui.reload_flag = True
 
 
+# NEBSIM_SET="source=1 density=0.8": set control channels once the
+# instrument runs (as if the button/knob had been used), after
+# NEBSIM_SET_AFTER seconds (default 3).
+def setter():
+    settings = os.environ.get("NEBSIM_SET")
+    if not settings:
+        return
+    time.sleep(float(os.environ.get("NEBSIM_SET_AFTER", "3")))
+    app = GLOBALS.get("app")
+    while app is None or app.c_handle is None:
+        time.sleep(0.5)
+        app = GLOBALS.get("app")
+    for item in settings.split():
+        name, value = item.split("=")
+        print("NEBSIM: setting %s = %s" % (name, value))
+        app.c_handle.setValue(name, float(value))
+    sys.stdout.flush()
+
+
+setter_thread = threading.Thread(target=setter)
+setter_thread.daemon = True
+setter_thread.start()
 thread = threading.Thread(target=switcher)
 thread.daemon = True
 thread.start()
