@@ -32,9 +32,10 @@ INSTR_DIR=/home/alarm/instr
 MOUNTFS=/home/alarm/QB_Nebulae_V2/Code/scripts/mountfs.sh
 USB_DEV=/dev/sda1
 USB_DIR=/mnt/memory
-# Bump when this script changes, so that a failure recorded by an older
-# version is retried.
-INSTALLER_VERSION=4
+# Bump when this script or tools/verify_plugin.py changes, so that a failure
+# recorded by an older version is retried. (Version 5: pearls7's check used
+# the old opcode signature and wrongly failed.)
+INSTALLER_VERSION=5
 
 if [ "$(id -u)" = "0" ]; then
     SUDO=""

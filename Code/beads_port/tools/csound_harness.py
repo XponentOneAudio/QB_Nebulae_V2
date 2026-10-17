@@ -315,6 +315,32 @@ def main():
     check(os.path.exists(os.path.join(root, "home/alarm/pearls/buffer.wav")),
           "buffer.wav saved")
 
+    # The boot installer's plugin check (tools/verify_plugin.py) must call the
+    # opcode with its current signature, or every install fails.
+    with open(os.path.join(HERE, "verify_plugin.py")) as f:
+        verify = f.read()
+    verify_orc = re.search(r'ORC = """(.*?)"""', verify, re.S).group(1)
+    vdir = os.path.join(root, "run_verify")
+    os.makedirs(vdir)
+    with open(os.path.join(vdir, "v.orc"), "w") as f:
+        f.write(verify_orc)
+    with open(os.path.join(vdir, "v.sco"), "w") as f:
+        f.write("i1 0 1\n")
+    vcmd = args.csound.split() + ["-n", "-d", "-m0"]
+    venv = dict(os.environ)
+    if args.plugin_dir:
+        venv["OPCODE6DIR64"] = os.path.abspath(args.plugin_dir)
+    else:
+        vcmd.append("--opcode-lib=" + args.lib)
+    vcmd += [os.path.join(vdir, "v.orc"), os.path.join(vdir, "v.sco")]
+    vresult = subprocess.run(vcmd, capture_output=True, text=True, env=venv)
+    vlog = vresult.stdout + vresult.stderr
+    verify_ok = vresult.returncode == 0 and "Unable to find opcode" not in vlog
+    print("  boot installer's plugin check orchestra: %s" % ("OK" if verify_ok else "FAILS"))
+    if not verify_ok:
+        print(vlog[-1500:])
+    check(verify_ok, "verify_plugin.py's orchestra does not compile with this opcode")
+
     # Power cycle: silent input, nothing touched.
     audio2, status2, _ = run_csound(args, config, instr, root, RESTORE_TIMELINE,
                                     RESTORE_DURATION, 0.0, "restore")

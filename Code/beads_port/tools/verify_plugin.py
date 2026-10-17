@@ -29,7 +29,7 @@ a0 init 0
 ; start size window density pitch speed overlap blend, 7 alt knobs,
 ; freeze reset source next mono sparse tap load save,
 ; igates = 0 (no GPIO access), ifiles = 0 (no files)
-a1, a2, kgate, kled, kres, kq, kf, kc, kio pearls a0, a0, 0.3, 0.5, 0.5, 0.8, 0.6, 0.75, 0.2, 0.8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0
+a1, a2, kgate, kled, kres, kq, kf, kc, kio, ksc pearls a0, a0, 0.3, 0.5, 0.5, 0.8, 0.6, 0.75, 0.2, 0.8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0
 krms rms a1 + a2
 chnset krms, "pearls_verify_rms"
 outs a1, a2

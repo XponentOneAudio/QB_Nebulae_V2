@@ -23,6 +23,8 @@ name, hence "Pearls".
 > re-lock and the freeze handling now work as on Beads, the quality settings
 > use the manual's names and order, and holding Next restarts the input gain.
 > `v2_1_2-pearls7` adds pitch quantisation of the grains with 8 scales.
+> `v2_1_2-pearls8` fixes pearls7's install: the installer's plugin check used
+> the old opcode signature, so it rejected the new plugin and removed Pearls.
 >
 > These new features have passed the desktop tests but not yet a hands-on test.
 > The tests cover the engine (desktop and ARM), Csound (including an emulated
@@ -202,7 +204,7 @@ no Pearls equivalent.
 ## Installing with a USB stick (no SSH)
 
 This uses the Nebulae's normal firmware-update mechanism. The update is the
-official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls7`).
+official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls8`).
 
 > **Check your hardware first.** This firmware is for Nebulae v2 units with a
 > **Raspberry Pi 3** on the back. A Pi 3 has full-size HDMI and a micro-USB
@@ -211,7 +213,7 @@ official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls7`).
 
 1. Copy `neb_update.zip` to the **root of your USB stick**. Your audio files
    and instruments can stay on it. Get the file from
-   `FirmwareUpdates/v_2_1_2_pearls7/` in this repository, or make it with
+   `FirmwareUpdates/v_2_1_2_pearls8/` in this repository, or make it with
    `./create_fw_update.sh`.
 2. With the stick inserted, power the Nebulae on. It installs the update
    (the LEDs show the update animation) and reboots by itself. It removes
@@ -401,7 +403,7 @@ controls, inject crashes, and restart Nebulae as systemd does. Run it as root
 micromamba create -p ~/py27 -c conda-forge python=2.7 numpy=1.14
 export PYTHON2=~/py27/bin/python
 make                                    # desktop build of the plugin
-S=tools/nebulae_sim/sim.sh FW=../../FirmwareUpdates/v_2_1_2_pearls7/neb_update.zip
+S=tools/nebulae_sim/sim.sh FW=../../FirmwareUpdates/v_2_1_2_pearls8/neb_update.zip
 $S $FW user pearls 30 build/libpearls.so                       # boot into Pearls
 NEBSIM_SWITCH_TO=user/pearls $S $FW factory a_granularlooper 40 build/libpearls.so
 NEBSIM_SET="source=1" NEBSIM_KEEP_LOG=1 $S $FW user pearls 20 build/libpearls.so
