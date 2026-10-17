@@ -90,6 +90,20 @@ GainControl::SoftClippingMode SoftClippingModeForQuality(int quality) {
 
 }  // namespace
 
+uint16_t ScaleMask(int scale) {
+  static const uint16_t masks[SCALE_LAST] = {
+    0x000,  // off
+    0xfff,  // chromatic
+    0xab5,  // major: 0 2 4 5 7 9 11
+    0x5ad,  // natural minor: 0 2 3 5 7 8 10
+    0x295,  // major pentatonic: 0 2 4 7 9
+    0x4a9,  // minor pentatonic: 0 3 5 7 10
+    0x081,  // octaves and fifths: 0 7
+    0x001,  // octaves
+  };
+  return scale >= 0 && scale < SCALE_LAST ? masks[scale] : 0;
+}
+
 void Controls::SetDefaults() {
   time = 0.5f;
   size = 0.5f;
@@ -102,6 +116,7 @@ void Controls::SetDefaults() {
   reverb = 0.0f;
   reverse = 0.0f;
   spread = 0.0f;
+  scale = SCALE_OFF;
   quality = QUALITY_DIGITAL;
   mono = false;
   synth = false;
@@ -181,6 +196,7 @@ bool Engine::Init() {
   input_silence_time_ = Seconds(kInputAbsentTime);
   status_.input_present = false;
 
+  pitch_ = 0.0f;
   seed_led_time_ = 0;
   status_.seed_locked = true;
   status_.overwrite_reserve = 1.0f;
@@ -469,6 +485,24 @@ void Engine::UpdateSeedButton(bool pressed, bool freeze_toggled) {
   seed_pressed_ = pressed;
 }
 
+void Engine::UpdatePitch() {
+  // The knob/CV pitch snaps to the scale too (it is also the root of the
+  // synth's oscillator and the delay's pitch shifter). A note changes only
+  // once the pitch is 0.2 semitone past the midpoint, so that CV noise
+  // doesn't flip between two notes.
+  const uint16_t mask = ScaleMask(controls_.scale);
+  const float pitch = controls_.pitch;
+  if (!mask) {
+    pitch_ = pitch;
+    return;
+  }
+  const float candidate = QuantizeSemitones(pitch, mask);
+  if (QuantizeSemitones(pitch_, mask) != pitch_ ||
+      fabsf(pitch - candidate) + 0.2f < fabsf(pitch - pitch_)) {
+    pitch_ = candidate;
+  }
+}
+
 void Engine::RestartGainControl() {
   restart_gain_pending_ = true;
 }
@@ -595,10 +629,12 @@ void Engine::BuildParameters(
   p->shape.cv = 0.0f;
   p->shape.has_cv = false;
 
-  p->pitch.base = c.pitch;
+  p->pitch.base = pitch_;
   p->pitch.attenuverter = c.pitch_random;
   p->pitch.cv = 0.0f;
   p->pitch.has_cv = false;
+  p->pitch.scale_mask = ScaleMask(c.scale);
+  p->time.scale_mask = p->size.scale_mask = p->shape.scale_mask = 0;
 
   p->monophonic_mode = false;
 
@@ -689,6 +725,7 @@ void Engine::ProcessAudio(
 
 void Engine::RenderBlock() {
   UpdateConfiguration();
+  UpdatePitch();
 
   FloatFrame in[kBlockSize];
   FloatFrame out[kBlockSize];

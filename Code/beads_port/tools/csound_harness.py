@@ -72,6 +72,10 @@ TIMELINE = [
     (15.05, "gkrecord", 0),
     (16.0, "gkfilesel", 1),      # Next held 2 s: restart the input gain
     (18.0, "gkfilesel", 0),
+    (19.0, "gkfilesel", 1),      # Next held + Record: next scale (chromatic)
+    (19.2, "gkrecord", 1),
+    (19.3, "gkrecord", 0),
+    (19.5, "gkfilesel", 0),
 ]
 DURATION = 25.0                  # the frozen buffer is saved after 10 s
 
@@ -171,8 +175,8 @@ def run_csound(args, config, instr, root, timeline, duration, amplitude, tag):
         events.append("i%d %f 0.001\n" % (100 + n, t))
     # Report the opcode's status twice a second.
     driver.append('\ninstr 98\nkq chnget "pearls_quality"\nkf chnget "pearls_frozen"\n'
-                  'kc chnget "pearls_clock"\nki chnget "pearls_io"\n'
-                  'printks "PEARLS_STATUS %d %d %.1f %d\\n", 0.5, kq, kf, kc, ki\nendin\n')
+                  'kc chnget "pearls_clock"\nki chnget "pearls_io"\nks chnget "pearls_scale"\n'
+                  'printks "PEARLS_STATUS %d %d %.1f %d %d\\n", 0.5, kq, kf, kc, ki, ks\nendin\n')
     header = nebulae_orc_header(args.conductor)
     if args.no_chnexport:
         header = re.sub(r"(gk\w+)\s+chnexport\s+\"\w+\",\s*\d", r"\1 init 0", header)
@@ -204,7 +208,7 @@ def run_csound(args, config, instr, root, timeline, duration, amplitude, tag):
         return None, None, log
     samples, ch, sr = read_output(out)
     status = [tuple(float(v) for v in m) for m in
-              re.findall(r"PEARLS_STATUS (\S+) (\S+) (\S+) (\S+)", log)]
+              re.findall(r"PEARLS_STATUS (\S+) (\S+) (\S+) (\S+) (\S+)", log)]
     for line in log.splitlines():
         if line.startswith("pearls:"):
             print("  " + line)
@@ -253,17 +257,20 @@ def main():
             ok = False
             print("  FAIL: " + message)
 
-    # Next at 3 s and 5 s: hi-fi (3) -> cold digital (2) -> sunny tape (1).
-    # The Instr Tester's index can't tell a press from a hold: its first
-    # press (held until the next one) restarts the gain instead, and the
-    # "long press" at 16 s is one more press there.
+    # Next at 3 s and 5 s: hi-fi (3) -> cold digital (2) -> sunny tape (1);
+    # the long press at 16 s and the combo at 19 s don't change it.
+    # The Instr Tester's index can't be held: its first press only counts at
+    # the second, and every later change is one press (no gain restart, no
+    # scale combo).
     increment = args.next_style == "increment"
     qualities = [int(q[0]) for q in status]
     steps = [q for i, q in enumerate(qualities) if i == 0 or q != qualities[i - 1]]
     print("  quality sequence: %s" % steps)
-    want_steps = [3, 2, 1]
+    want_steps = [3, 1, 0, 3] if increment else [3, 2, 1]
     check(steps == want_steps, "Next should step quality %s" % want_steps)
-    final_quality = 1
+    final_quality = want_steps[-1]
+    final_scale = 0 if increment else 1
+    check(int(status[-1][4]) == final_scale, "scale %d after Next + Record" % final_scale)
     for label, t0, t1 in [("digital granular", 1.5, 3.0), ("dirty tape", 3.5, 5.0),
                           ("clean tape", 5.5, 6.0), ("frozen", 6.5, 8.0),
                           ("delay mode", 9.0, 10.0), ("synth", 10.5, 12.0),
@@ -283,8 +290,10 @@ def main():
     check(any(st[3] == 3 for st in status[27:32]), "save reported (io = 3)")
     check(status_at(17.0)[2] > 0, "tap tempo clock running")
     if not increment:
-        check(any(st[3] == 5 for st in status[36:46]),
-              "Next held 1.5 s restarts the input gain (io = 5)")
+        # Measuring takes 6 s: the restart after synth mode (12 s) is over
+        # by 19 s, the one from the long press (released at 18 s) isn't.
+        check(any(st[3] == 5 for st in status[45:48]),
+              "Next held 1.5 s restarts the input gain (io = 5 at 23 s)")
     saved = os.path.join(root, "mnt/memory/pearls_001.wav")
     check(os.path.exists(saved), "pearls_001.wav on the USB stick")
     check(os.path.exists(os.path.join(root, "home/alarm/audio/pearls_001.wav")),
@@ -292,9 +301,8 @@ def main():
     if os.path.exists(saved):
         info = wav_info(saved)
         print("  saved WAV: %d channel(s), %d Hz, %d frames" % info)
-        # The 1.5 s sample at the buffer rate: sunny tape 24 kHz, or cold
-        # digital 32 kHz (Instr Tester sequence).
-        rate = 32000 if increment else 24000
+        # The 1.5 s sample at the buffer rate: sunny tape, 24 kHz.
+        rate = 24000
         check(info[1] == rate and abs(info[2] - 1.5 * rate) < 10,
               "saved WAV should hold the 1.5 s sample at %d Hz" % rate)
     state_file = os.path.join(root, "home/alarm/pearls/state.txt")
@@ -315,6 +323,7 @@ def main():
     level = rms(audio2, 2.0, 4.0)
     print("  after restart: status %s, rms %.3f (silent input)" % (status2[-1], level))
     check(status2 and status2[0][0] == final_quality, "quality restored")
+    check(status2 and status2[-1][4] == final_scale, "scale restored")
     check(status2 and status2[-1][1] == 1, "buffer restored frozen")
     check(level >= 0.01, "restored buffer plays")
 

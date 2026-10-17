@@ -159,6 +159,7 @@ class ControlHandler(object):
         self.pearls_frozen_comm = None
         self.pearls_clock_comm = None
         self.pearls_io_comm = None
+        self.pearls_scale_comm = None
         if self.configData is not None:
             if self.configData.has_key("ignoregate"):
                 for name in self.configData.get("ignoregate"):
@@ -177,6 +178,7 @@ class ControlHandler(object):
                     self.pearls_frozen_comm = control.CommChannel(self.csound, "pearls_frozen")
                     self.pearls_clock_comm = control.CommChannel(self.csound, "pearls_clock")
                     self.pearls_io_comm = control.CommChannel(self.csound, "pearls_io")
+                    self.pearls_scale_comm = control.CommChannel(self.csound, "pearls_scale")
         # Worker for writing audio file.
         #self.writeThread = threading.Thread(target=self.writeBufferToAudioFile())
         self.writeThread = threading.Thread(target=self.dummyThread())

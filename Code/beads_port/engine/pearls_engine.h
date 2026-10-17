@@ -51,6 +51,23 @@ enum Quality {
   QUALITY_LAST
 };
 
+// Pitch quantisation scales (Pearls addition): grain pitches snap to the
+// scale's notes, the root being the unison (the recorded pitch).
+enum Scale {
+  SCALE_OFF,
+  SCALE_CHROMATIC,
+  SCALE_MAJOR,
+  SCALE_MINOR,
+  SCALE_MAJOR_PENTATONIC,
+  SCALE_MINOR_PENTATONIC,
+  SCALE_FIFTHS,             // octaves and fifths
+  SCALE_OCTAVES,
+  SCALE_LAST
+};
+
+// Semitone mask of a scale (bit n = n semitones above the root).
+uint16_t ScaleMask(int scale);
+
 // All values are what the Beads firmware computes from its pots and CVs,
 // before they reach beads::Processor. See nebulae_mapping.h for the
 // conversion from Nebulae control values.
@@ -75,6 +92,7 @@ struct Controls {
   // Pearls additions (0 = Beads behaviour).
   float reverse;       // 0..1, probability of reversed grains
   float spread;        // 0..1, extra random stereo spread of the grains
+  int scale;           // Scale: pitch quantisation
 
   int quality;         // Quality
   bool mono;           // Mono buffer (twice as long), left input only.
@@ -179,6 +197,7 @@ class Engine {
 
  private:
   void RenderBlock();
+  void UpdatePitch();
   void UpdateTapClock(bool* pulses);
   void ContinueTransfer();
   void UpdateSeedButton(bool pressed, bool freeze_toggled);
@@ -249,6 +268,9 @@ class Engine {
   // Input presence detection, replacing the Beads normalisation probe.
   float input_envelope_;
   size_t input_silence_time_;
+
+  // Pitch after quantisation, with hysteresis.
+  float pitch_;
 
   // Grain gate LED stretcher.
   size_t seed_led_time_;

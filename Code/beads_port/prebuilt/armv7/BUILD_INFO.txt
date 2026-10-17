@@ -1,6 +1,6 @@
 libpearls.so for Nebulae v2 (armv7 hard-float, Csound 6 double)
-source commit: 4e3b1d6
+source commit: 9c89287
 compiler: arm-linux-gnueabihf-g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
 csound headers: 6.09.1
 requires: CXXABI_1.3 GLIBCXX_3.4 GLIBC_2.17 GLIBC_2.4
-sha256: e1d609cab707f78baafd1af42c617335e58758f7ddfa15315836fe50b8e5d0e5
+sha256: 9ccae0ddbba0ad7476e25953b7922c5d2c73983db94806ac8e9173b7df91038f

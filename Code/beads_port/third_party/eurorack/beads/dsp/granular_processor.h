@@ -159,6 +159,7 @@ class GranularProcessor {
     p.pitch.base = 0.0f;
     p.pitch.attenuverter = 1.0f;
     p.pitch.has_cv = false;
+    p.pitch.scale_mask = 0;
     
     p.monophonic_mode = false;
 

@@ -22,6 +22,7 @@ name, hence "Pearls".
 > `v2_1_2-pearls6` brings the controls closer to the Beads manual. The seed
 > re-lock and the freeze handling now work as on Beads, the quality settings
 > use the manual's names and order, and holding Next restarts the input gain.
+> `v2_1_2-pearls7` adds pitch quantisation of the grains with 8 scales.
 >
 > These new features have passed the desktop tests but not yet a hands-on test.
 > The tests cover the engine (desktop and ARM), Csound (including an emulated
@@ -44,6 +45,8 @@ Pearls additions, beyond Beads:
 - **Tap tempo** on the Record button: an internal clock for the grains (or
   the delay), as if a clock were patched into the seed input.
 - **Reversed grains** and **stereo spread** on the free secondary knobs.
+- **Pitch quantisation:** grain pitches snap to a scale (8 to choose from),
+  after the pitch randomisation, so random pitches stay musical.
 - **Tighter gate timing** on the Freeze and Reset gates and the EOL output.
 
 ## Panel
@@ -65,6 +68,7 @@ Pearls additions, beyond Beads:
 | **Next** button / gate | QUALITY, on release and in the Beads order: hi-fi (16-bit 48 kHz) → cold digital → sunny tape → scorched cassette. The encoder LEDs show the Beads colour for 1.5 s. While the buffer is frozen, the change waits until it's released (as on Beads). **Hold 1.5 s:** restart the automatic input gain (Beads: long press on the quality button) |
 | **Source** button / gate | Wavetable synth mode on/off |
 | **Record** button | TAP TEMPO: tap two or more times to clock the grains (or the delay) at that tempo; a single tap later re-aligns the beat; hold 1 s to stop |
+| **Hold Next + press Record** | PITCH QUANTISATION: steps through the scales off → chromatic → major → minor → major pentatonic → minor pentatonic → octaves and fifths → octaves → off. The Pitch encoder LEDs show the scale's colour for 1.5 s: white, red, amber, yellow, green, cyan, blue, magenta. The Next press then does nothing else, and the Record press doesn't count as a tap |
 | **EOL** output | Grain / delay-tap gate |
 | **Reset** LED | Grain activity (dim while locked and idle) |
 | **Freeze** LED | Buffer frozen (by the button, the gate, or after loading) |
@@ -92,6 +96,22 @@ beat when fully clockwise). Counter-clockwise it divides the clock.
 
 Reversed grains and stereo spread act on grains, not on the delay mode's
 taps.
+
+### Pitch quantisation
+
+- **What snaps:** each grain's pitch, including its random variation (Pitch
+  randomness on the secondary layer). With a scale, random pitch spreads
+  over the scale's notes instead of sliding between them. The Pitch encoder
+  and 1 V/oct CV snap too, with a little hysteresis so that a CV near the
+  boundary between two notes doesn't flicker. Turned fully up, the
+  secondary Pitch encoder (pitch randomness) spreads grains over up to two
+  octaves either way.
+- **The root** is the unison: the pitch the audio was recorded or loaded
+  at. Play a sample in A, choose minor, and the grains play A minor notes.
+- **Delay mode:** the pitch shifter follows the snapped Pitch setting.
+- **Synth mode:** the oscillator follows the snapped Pitch setting, and the
+  grains snap to the scale.
+- **Remembered** across power cycles, like the quality.
 
 ## Samples, saving and memory
 
@@ -167,9 +187,8 @@ no Pearls equivalent.
   distribution the secondary Freeze button, rather than one knob either side
   of noon. Nebulae CVs are added to the knobs, so there is no CV-controlled
   randomisation.
-- **Instr Tester:** its Next is an incrementing index, which can't be held.
-  The first press after a pause of more than 1.5 s restarts the input gain
-  instead of stepping the quality.
+- **Instr Tester:** its Next is an incrementing index, which can't be held,
+  so the Next hold gestures aren't available there.
 - **Gate timing.** Csound renders audio in bursts, so reading the gates once
   per control period put edges up to a few milliseconds early or late.
   - Since pearls5, a separate thread reads the Freeze and Reset gates every
@@ -183,7 +202,7 @@ no Pearls equivalent.
 ## Installing with a USB stick (no SSH)
 
 This uses the Nebulae's normal firmware-update mechanism. The update is the
-official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls6`).
+official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls7`).
 
 > **Check your hardware first.** This firmware is for Nebulae v2 units with a
 > **Raspberry Pi 3** on the back. A Pi 3 has full-size HDMI and a micro-USB
@@ -192,7 +211,7 @@ official v2.1.2 firmware plus Pearls (version `v2_1_2-pearls6`).
 
 1. Copy `neb_update.zip` to the **root of your USB stick**. Your audio files
    and instruments can stay on it. Get the file from
-   `FirmwareUpdates/v_2_1_2_pearls6/` in this repository, or make it with
+   `FirmwareUpdates/v_2_1_2_pearls7/` in this repository, or make it with
    `./create_fw_update.sh`.
 2. With the stick inserted, power the Nebulae on. It installs the update
    (the LEDs show the update animation) and reboots by itself. It removes
@@ -290,10 +309,11 @@ built for your computer:
    folder, run `python instr_tester/nebulae.py pearls`.
 
 In the tester:
-- **Next** steps the quality on each press. A press more than 1.5 s after the
-  previous one restarts the input gain instead: the tester's file index
-  can't be held, so Pearls can't tell a press from a hold. Put a few audio
-  files in its `audio/` folder; with fewer than two, Next does nothing.
+- **Next** steps the quality on each press, except the first press, which
+  only takes effect at the second. The tester's file index can't be held,
+  so the input gain restart and the scale combo (Next + Record) aren't
+  available. Put a few audio files in its `audio/` folder; with fewer than
+  two, Next does nothing.
 - **Reset** is a short tap, so it seeds grains and unlocks the generator.
   Holding it to re-lock isn't possible there.
 - **Secondary buttons** aren't available yet. These are the mono buffer, the
@@ -314,7 +334,7 @@ don't.
 
 ```sh
 cd /home/alarm/QB_Nebulae_V2/Code/beads_port
-make test                     # engine tests (238 checks)
+make test                     # engine tests (250 checks)
 make bench && build/pearls_bench   # CPU use per mode; stop Nebulae first
 ```
 
@@ -381,7 +401,7 @@ controls, inject crashes, and restart Nebulae as systemd does. Run it as root
 micromamba create -p ~/py27 -c conda-forge python=2.7 numpy=1.14
 export PYTHON2=~/py27/bin/python
 make                                    # desktop build of the plugin
-S=tools/nebulae_sim/sim.sh FW=../../FirmwareUpdates/v_2_1_2_pearls6/neb_update.zip
+S=tools/nebulae_sim/sim.sh FW=../../FirmwareUpdates/v_2_1_2_pearls7/neb_update.zip
 $S $FW user pearls 30 build/libpearls.so                       # boot into Pearls
 NEBSIM_SWITCH_TO=user/pearls $S $FW factory a_granularlooper 40 build/libpearls.so
 NEBSIM_SET="source=1" NEBSIM_KEEP_LOG=1 $S $FW user pearls 20 build/libpearls.so

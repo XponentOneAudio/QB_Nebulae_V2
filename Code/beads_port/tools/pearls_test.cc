@@ -659,6 +659,120 @@ void TestGainRestart() {
   CHECK(engine.status().gain_adjusting, "measuring again after a restart");
 }
 
+// Goertzel power of x[from..] at frequency f.
+double PowerAt(const std::vector<float>& x, size_t from, float f) {
+  double s1 = 0.0, s2 = 0.0;
+  const double w = 2.0 * cos(2.0 * M_PI * f / 48000.0);
+  for (size_t i = from; i < x.size(); ++i) {
+    const double s0 = x[i] + w * s1 - s2;
+    s2 = s1;
+    s1 = s0;
+  }
+  return s1 * s1 + s2 * s2 - w * s1 * s2;
+}
+
+// Frequency with the most energy, in 1/16 semitone steps.
+float PeakFrequency(const std::vector<float>& x, size_t from, float lo,
+                    float hi) {
+  float best = lo;
+  double best_power = -1.0;
+  for (float f = lo; f < hi; f *= 1.0036f) {
+    const double power = PowerAt(x, from, f);
+    if (power > best_power) {
+      best_power = power;
+      best = f;
+    }
+  }
+  return best;
+}
+
+void TestPitchQuantisation() {
+  printf("pitch quantisation\n");
+  const uint16_t major = ScaleMask(SCALE_MAJOR);
+  CHECK(beads::QuantizeSemitones(5.4f, 0) == 5.4f, "off");
+  CHECK(beads::QuantizeSemitones(5.4f, ScaleMask(SCALE_CHROMATIC)) == 5.0f,
+        "chromatic");
+  CHECK(beads::QuantizeSemitones(5.6f, major) == 5.0f, "major: F");
+  CHECK(beads::QuantizeSemitones(6.2f, major) == 7.0f, "major: G");
+  CHECK(beads::QuantizeSemitones(-1.4f, major) == -1.0f, "major: B below");
+  CHECK(beads::QuantizeSemitones(-13.2f, major) == -13.0f, "octave below");
+  CHECK(beads::QuantizeSemitones(9.0f, ScaleMask(SCALE_OCTAVES)) == 12.0f,
+        "octaves");
+  CHECK(beads::QuantizeSemitones(-4.0f, ScaleMask(SCALE_FIFTHS)) == -5.0f,
+        "fifths: a fourth below is the fifth's octave");
+
+  // A frozen 1 kHz buffer played 4.6 semitones up, with random pitch.
+  const int scales[] = { SCALE_OFF, SCALE_CHROMATIC, SCALE_OCTAVES };
+  for (int k = 0; k < 3; ++k) {
+    Engine engine;
+    engine.Init();
+    Controls c;
+    c.SetDefaults();
+    c.dry_wet = 1.0f;
+    c.density = 0.3f;     // regular, a few overlapping grains
+    c.size = 0.6f;
+    c.shape = 0.8f;
+    c.pitch = 4.6f;
+    c.scale = scales[k];
+    Idle(&engine, c, 0.1f);
+    std::vector<float> l(96000), r(96000);
+    for (size_t i = 0; i < l.size(); ++i) {
+      l[i] = r[i] = 0.5f * sinf(2.0f * float(M_PI) * 1000.0f * i / 48000.0f);
+    }
+    engine.StartLoad(&l[0], &r[0], l.size(), 48000.0f, true);
+    FinishTransfer(&engine, c, 1.0f);
+    engine.EndTransfer();
+    std::vector<float> out;
+    FinishTransfer(&engine, c, 3.0f, &out);
+    const float f = PeakFrequency(out, 48000, 700.0f, 2000.0f);
+    const float want = scales[k] == SCALE_OFF ? 1000.0f * powf(2.0f, 4.6f / 12.0f)
+        : (scales[k] == SCALE_CHROMATIC ? 1000.0f * powf(2.0f, 5.0f / 12.0f)
+                                        : 1000.0f);
+    CHECK(fabsf(f - want) < 0.01f * want, "scale %d: %.1f Hz, want %.1f",
+          scales[k], f, want);
+    printf("  scale %d: %.1f Hz (want %.1f)\n", scales[k], f, want);
+  }
+
+  // With random pitch, every grain lands on a scale note: octaves only.
+  // Compared with the same measurement with no scale.
+  double ratios[2];
+  for (int k = 0; k < 2; ++k) {
+    Engine engine;
+    engine.Init();
+    Controls c;
+    c.SetDefaults();
+    c.dry_wet = 1.0f;
+    c.density = 0.2f;
+    c.size = 0.65f;
+    c.shape = 0.8f;
+    c.pitch_random = 1.0f;
+    c.scale = k ? SCALE_OCTAVES : SCALE_OFF;
+    Idle(&engine, c, 0.1f);
+    std::vector<float> l(96000), r(96000);
+    for (size_t i = 0; i < l.size(); ++i) {
+      l[i] = r[i] = 0.5f * sinf(2.0f * float(M_PI) * 500.0f * i / 48000.0f);
+    }
+    engine.StartLoad(&l[0], &r[0], l.size(), 48000.0f, true);
+    FinishTransfer(&engine, c, 1.0f);
+    engine.EndTransfer();
+    std::vector<float> out;
+    FinishTransfer(&engine, c, 6.0f, &out);
+    // Energy within half a semitone of 125/250/500/1000/2000 Hz vs. the
+    // rest, in 1/8 semitone steps.
+    double on = 0.0, off = 0.0;
+    for (float f = 100.0f; f < 4000.0f; f *= 1.0072f) {
+      const float octaves = log2f(f / 500.0f);
+      const bool near = fabsf(octaves - roundf(octaves)) < 0.5f / 12.0f;
+      (near ? on : off) += PowerAt(out, 48000, f);
+    }
+    ratios[k] = on / off;
+  }
+  CHECK(ratios[1] > 4.0 * ratios[0], "random pitch: on/off-scale energy "
+        "%.2f with no scale, %.2f with octaves", ratios[0], ratios[1]);
+  printf("  random pitch: on/off-scale energy %.2f with no scale, %.2f with "
+         "octaves\n", ratios[0], ratios[1]);
+}
+
 void TestHoldRelease() {
   printf("a loaded buffer is frozen as if FREEZE were pressed\n");
   for (int freeze_first = 0; freeze_first < 2; ++freeze_first) {
@@ -905,10 +1019,11 @@ void TestFiles() {
   state.quality = 1;
   state.frozen = true;
   state.load_index = 7;
+  state.scale = 5;
   CHECK(WriteSavedState(dir + "/state.txt", state), "write state");
   SavedState read;
   CHECK(ReadSavedState(dir + "/state.txt", &read) && read.quality == 1 &&
-        read.frozen && read.load_index == 7, "read state");
+        read.frozen && read.load_index == 7 && read.scale == 5, "read state");
   CHECK(!ReadSavedState(dir + "/none.txt", &read), "missing state");
   CHECK(MakeDirectories(dir + "/x/y/z"), "mkdir -p");
   bool mounted = true;
@@ -1004,6 +1119,7 @@ int main() {
   TestFreeze();
   TestFreezeProtectsBuffer();
   TestGainRestart();
+  TestPitchQuantisation();
   TestSeedInput();
   TestVintageDelayKeepsPitch();
   TestQualitySwitching();

@@ -82,8 +82,9 @@ struct SavedState {
   int quality;        // -1 = none saved
   bool frozen;        // buffer.wav holds a frozen buffer to restore
   int load_index;     // last sample loaded (index in the sorted list)
+  int scale;          // pitch quantisation scale, -1 = none saved
 
-  SavedState() : quality(-1), frozen(false), load_index(-1) { }
+  SavedState() : quality(-1), frozen(false), load_index(-1), scale(-1) { }
 };
 
 bool ReadSavedState(const std::string& path, SavedState* state);

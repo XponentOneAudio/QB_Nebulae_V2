@@ -40,6 +40,7 @@
 //   Record (secondary)                    mono buffer
 //   Freeze (secondary)                    sparse randomness flavour
 //   Record                                tap tempo (Pearls addition)
+//   Next held + Record                    pitch quantisation scale (Pearls)
 
 #ifndef PEARLS_ENGINE_NEBULAE_MAPPING_H_
 #define PEARLS_ENGINE_NEBULAE_MAPPING_H_
@@ -73,6 +74,7 @@ struct NebulaeControls {
   bool reset;         // reset button (momentary) = seed button
   bool source;        // source button (latched) = synth mode
   int quality;        // 0..3, stepped by Next presses
+  int scale;          // Scale, stepped by Record presses while Next is held
   bool mono;          // secondary Record = mono buffer
   bool sparse;        // secondary Freeze = sparse randomness flavour
   bool record;        // record button (momentary) = tap tempo
@@ -147,6 +149,7 @@ inline void MapNebulaeControls(const NebulaeControls& n, Controls* c) {
   c->freeze = n.freeze;
   c->seed_button = n.reset;
   c->tap = n.record;
+  c->scale = std::min(std::max(n.scale, 0), int(SCALE_LAST) - 1);
   c->gain = GainFromKnob(n.density_alt);
 }
 

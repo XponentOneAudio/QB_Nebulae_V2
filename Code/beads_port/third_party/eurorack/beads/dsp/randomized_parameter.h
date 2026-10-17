@@ -87,11 +87,38 @@ class RandomWalkModulation {
   DISALLOW_COPY_AND_ASSIGN(RandomWalkModulation);
 };
 
+// Nebulae port: snaps a transposition (semitones) to the nearest note of a
+// scale. mask bit n = n semitones above the root (unison) is in the scale;
+// 0 = no quantisation.
+inline float QuantizeSemitones(float semitones, uint16_t mask) {
+  if (!mask) {
+    return semitones;
+  }
+  const int octave = static_cast<int>(floorf(semitones / 12.0f));
+  float best = semitones;
+  float best_distance = 1e9f;
+  for (int o = octave - 1; o <= octave + 1; ++o) {
+    for (int n = 0; n < 12; ++n) {
+      if (mask & (1 << n)) {
+        const float note = static_cast<float>(12 * o + n);
+        const float distance = fabsf(semitones - note);
+        if (distance < best_distance) {
+          best_distance = distance;
+          best = note;
+        }
+      }
+    }
+  }
+  return best;
+}
+
 struct RandomizedParameter {
   float base;
   float attenuverter;
   float cv;
   bool has_cv;
+  // Nebulae port: scale for pitch_value() (see QuantizeSemitones).
+  uint16_t scale_mask;
   
   inline float randomness_amount() const {
     if (has_cv) {
@@ -146,7 +173,8 @@ struct RandomizedParameter {
   }
   
   inline float pitch_value() const {
-    return stmlib::SemitonesToRatio(value(NULL, 0, 24.0f, false));
+    return stmlib::SemitonesToRatio(
+        QuantizeSemitones(value(NULL, 0, 24.0f, false), scale_mask));
   }
 };
 

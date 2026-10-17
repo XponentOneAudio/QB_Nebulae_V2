@@ -24,7 +24,8 @@
 // Csound plugin opcode running the Pearls (Beads) engine from Nebulae
 // control channels.
 //
-//   aL, aR, kgate, kseedled, kreserve, kquality, kfrozen, kclock, kio  pearls
+//   aL, aR, kgate, kseedled, kreserve, kquality, kfrozen, kclock, kio,
+//   kscale  pearls
 //       ainL, ainR,
 //       kstart, ksize, kwindow, kdensity, kpitch, kspeed, koverlap, kblend,
 //       kstart_alt, ksize_alt, kwindow_alt, kpitch_alt, kdensity_alt,
@@ -34,12 +35,15 @@
 //
 // Control inputs are Nebulae channel values (see engine/nebulae_mapping.h),
 // except:
-//   knext   Next button level, as Beads' quality button: a short press
-//           steps the quality on release (downwards, as Beads), a 1.5 s
-//           press restarts the automatic gain control. Other changes (the
-//           Instr Tester's incrementing file index) each step once. The
-//           opcode keeps the quality, and saves it with ifiles = 1;
-//   ktap    tap tempo button (Record);
+//   knext   Next button level, as Beads' quality button: released after a
+//           short press, it steps the quality (downwards, as Beads); after
+//           a 1.5 s press, it restarts the automatic gain control. Other
+//           changes (the Instr Tester's incrementing file index) each step
+//           once. The opcode keeps the quality, and saves it with
+//           ifiles = 1;
+//   ktap    tap tempo button (Record). Pressed while Next is held, it steps
+//           the pitch quantisation scale instead (kept and saved like the
+//           quality), and that Next press does nothing else;
 //   kload   any change loads the next WAV file from the Nebulae audio folder
 //           (the USB stick's files) into the buffer, held frozen;
 //   ksave   a rising edge saves the buffer to the USB stick as a WAV file.
@@ -62,7 +66,8 @@
 // (0..3), kfrozen (1 = frozen), kclock (1 = tap tempo beat, 0.5 = tap tempo
 // clock running, 0 = off) and kio (0 = idle, 1 = loading or saving,
 // 2 = loaded, 3 = saved, 4 = failed; results stay for 1.5 s; 5 = the
-// automatic gain control is measuring the input).
+// automatic gain control is measuring the input), kscale (0..7, see
+// pearls::Scale).
 
 #include <sched.h>
 #include <time.h>
@@ -173,6 +178,7 @@ struct PearlsState {
   std::vector<float> in_l, in_r, out_l, out_r;
   std::vector<uint8_t> freeze_gate, seed_gate, gate_out;
   int quality;
+  int scale;
 
   // Gates.
   NebulaeGates gates;
@@ -216,12 +222,16 @@ struct PearlsState {
   MYFLT previous_load;
   MYFLT previous_next;
   bool next_pressed;
-  bool next_long_press;
+  bool next_is_index;        // Next is the Instr Tester's file index
+  bool next_combo;
   double next_press_time;
+  bool tap_previous;
+  bool tap_masked;
   bool previous_save;
 
   PearlsState()
       : csound(NULL), quality(pearls::QUALITY_DIGITAL),
+        scale(pearls::SCALE_OFF),
         use_gates(false), frame(0),
         freeze_level(false), seed_level(false), eol_level(false),
         eol_release_frame(0), poller(NULL), quit_poller(0),
@@ -232,7 +242,9 @@ struct PearlsState {
         save_requested(false), state_change_time(0.0), state_dirty(false),
         frozen_since(-1.0), io_status(IO_IDLE), io_status_time(0.0),
         previous_load(0), previous_next(0), next_pressed(false),
-        next_long_press(false), next_press_time(0.0), previous_save(false) { }
+        next_is_index(false),
+        next_combo(false), next_press_time(0.0), tap_previous(false),
+        tap_masked(false), previous_save(false) { }
 };
 
 struct PEARLS {
@@ -247,6 +259,7 @@ struct PEARLS {
   MYFLT* kfrozen;
   MYFLT* kclock;
   MYFLT* kio;
+  MYFLT* kscale;
   // Inputs.
   MYFLT* in_l;
   MYFLT* in_r;
@@ -680,8 +693,12 @@ int pearls_init(CSOUND* csound, PEARLS* p) {
     if (s->saved.quality >= 0) {
       s->quality = s->saved.quality;
     }
+    if (s->saved.scale >= 0 && s->saved.scale < pearls::SCALE_LAST) {
+      s->scale = s->saved.scale;
+    }
     s->wanted = s->saved;
     s->wanted.quality = s->quality;
+    s->wanted.scale = s->scale;
     s->save_l.assign(pearls::Engine::MaxBufferFrames(), 0.0f);
     s->save_r.assign(pearls::Engine::MaxBufferFrames(), 0.0f);
     if (s->saved.frozen) {
@@ -768,29 +785,49 @@ int pearls_perf(CSOUND* csound, PEARLS* p) {
   // Audio time for the controls and files, wall-clock time for the gates.
   const double now = double(s->frame) / pearls::Engine::kSampleRate;
 
-  // Buttons: quality steps, gain restart, load and save requests.
+  // Buttons: quality steps, gain restart, scale steps, load and save
+  // requests. Next acts when released, as Beads' quality button.
   const MYFLT next = *p->knext;
   int quality_steps = 0;
   if (next != s->previous_next) {
-    if (s->previous_next == MYFLT(0) && next == MYFLT(1)) {
+    s->next_is_index = s->next_is_index ||
+        (next != MYFLT(0) && next != MYFLT(1));
+    if (s->previous_next == MYFLT(0) && next == MYFLT(1) &&
+        !s->next_is_index) {
       s->next_pressed = true;
-      s->next_long_press = false;
+      s->next_combo = false;
       s->next_press_time = now;
     } else if (next == MYFLT(0) && s->next_pressed) {
-      quality_steps += s->next_long_press ? 0 : 1;
+      if (s->next_combo) {
+        // Next + Record: nothing else.
+      } else if (now - s->next_press_time >= kGainRestartPress) {
+        s->engine.RestartGainControl();
+      } else {
+        ++quality_steps;
+      }
       s->next_pressed = false;
     } else {
       // An incrementing index (Instr Tester): every change is a press.
-      quality_steps += (s->next_pressed && !s->next_long_press) ? 2 : 1;
+      quality_steps += s->next_pressed ? 2 : 1;
       s->next_pressed = false;
     }
     s->previous_next = next;
   }
-  if (s->next_pressed && !s->next_long_press &&
-      now - s->next_press_time >= kGainRestartPress) {
-    s->next_long_press = true;
-    s->engine.RestartGainControl();
+  // Record: tap tempo, or the scale while Next is held. A press that steps
+  // the scale is hidden from the tap tempo until it is released.
+  const bool tap = *p->ktap >= MYFLT(0.5);
+  if (tap && !s->tap_previous && s->next_pressed) {
+    s->next_combo = true;
+    s->tap_masked = true;
+    s->scale = (s->scale + 1) % pearls::SCALE_LAST;
+    s->wanted.scale = s->scale;
+    s->state_dirty = true;
+    s->state_change_time = now;
   }
+  if (!tap) {
+    s->tap_masked = false;
+  }
+  s->tap_previous = tap;
   if (quality_steps) {
     // Downwards, as the Beads quality button.
     s->quality = (s->quality + quality_steps * (pearls::QUALITY_LAST - 1)) %
@@ -833,7 +870,8 @@ int pearls_perf(CSOUND* csound, PEARLS* p) {
   n.quality = s->quality;
   n.mono = *p->kmono >= MYFLT(0.5);
   n.sparse = *p->ksparse >= MYFLT(0.5);
-  n.record = *p->ktap >= MYFLT(0.5);
+  n.record = tap && !s->tap_masked;
+  n.scale = s->scale;
 
   pearls::Controls controls;
   pearls::MapNebulaeControls(n, &controls);
@@ -888,6 +926,7 @@ int pearls_perf(CSOUND* csound, PEARLS* p) {
   *p->kclock = status.clock_led
       ? MYFLT(1)
       : (status.clock_running ? MYFLT(0.5) : MYFLT(0));
+  *p->kscale = MYFLT(s->scale);
   *p->kio = MYFLT(s->io_status == IO_IDLE && status.gain_adjusting
       ? int(IO_GAIN_ADJUSTING) : s->io_status);
   return OK;
@@ -903,7 +942,7 @@ static OENTRY localops[] = {
     sizeof(PEARLS),
     0,
     3,
-    (char*) "aakkkkkkk",
+    (char*) "aakkkkkkkk",
     (char*) "aakkkkkkkkkkkkkkkkkkkkkkkkoo",
     (SUBR) pearls_init,
     (SUBR) pearls_perf,

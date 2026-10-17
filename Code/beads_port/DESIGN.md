@@ -429,3 +429,12 @@ pearls6 aligned the controls with the Beads manual and firmware
   the Nebulae's latching Freeze channel, so one press releases it.
 - **Quality button:** steps downwards on release; a 1.5 s press restarts the
   automatic gain control.
+
+pearls7 adds pitch quantisation. Every grain's pitch goes through
+`RandomizedParameter::pitch_value()` when it starts, so a scale mask there
+snaps the final pitch, including its random part, to the scale. The engine
+also snaps the base pitch, with 0.2 semitone of hysteresis; that base pitch
+also drives the synth oscillator and the delay's pitch shifter. The scale is
+chosen with Next held + Record. The opcode hides that Record press from the
+tap tempo, and moves the gain restart to Next's release, as on Beads, so
+that the combo can cancel it.

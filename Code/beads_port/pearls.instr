@@ -46,6 +46,10 @@ nebconfigend
 ;   Record button                   tap tempo: tap twice or more to clock
 ;                                   the grains (or delay) at that tempo;
 ;                                   hold 1 s to stop
+;   Hold Next + press Record        pitch quantisation scale: off,
+;                                   chromatic, major, minor, major
+;                                   pentatonic, minor pentatonic, octaves
+;                                   and fifths, octaves (remembered)
 ;   EOL output                      grain / delay tap gate
 ;
 ; Secondary controls (hold Source)
@@ -79,7 +83,7 @@ ainl, ainr inch 1, 2
 ; Next (gkfilesel) goes to the opcode as is: the button level on the
 ; Nebulae (momentary), an incrementing file index in the Qu-Bit Instr Tester.
 
-aL, aR, kgate, kseedled, kreserve, kquality, kfrozen, kclock, kio pearls ainl, ainr, gkloopstart, gkloopsize, gkwindow, gkdensity, gkpitch, gkspeed, gkoverlap, gkblend, gkloopstart_alt, gkloopsize_alt, gkwindow_alt, gkpitch_alt, gkdensity_alt, gkoverlap_alt, gkblend_alt, gkfreeze, gkreset, gksource, gkfilesel, gkrecord_alt, gkfreeze_alt, gkrecord, gkfile_alt, gkreset_alt, 1, 1
+aL, aR, kgate, kseedled, kreserve, kquality, kfrozen, kclock, kio, kscale pearls ainl, ainr, gkloopstart, gkloopsize, gkwindow, gkdensity, gkpitch, gkspeed, gkoverlap, gkblend, gkloopstart_alt, gkloopsize_alt, gkwindow_alt, gkpitch_alt, gkdensity_alt, gkoverlap_alt, gkblend_alt, gkfreeze, gkreset, gksource, gkfilesel, gkrecord_alt, gkfreeze_alt, gkrecord, gkfile_alt, gkreset_alt, 1, 1
 
 outs aL, aR
 
@@ -90,6 +94,7 @@ chnset kreserve, "pearls_reserve"
 chnset kfrozen, "pearls_frozen"
 chnset kclock, "pearls_clock"
 chnset kio, "pearls_io"
+chnset kscale, "pearls_scale"
 gkeol = kgate
 gksizestatus = 0
 gkrecordstatus = 0

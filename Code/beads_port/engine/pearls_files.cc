@@ -406,6 +406,8 @@ bool ReadSavedState(const std::string& path, SavedState* state) {
       state->quality = value;
     } else if (key == "frozen") {
       state->frozen = value != 0;
+    } else if (key == "scale" && value >= 0 && value < 64) {
+      state->scale = value;
     } else if (key == "load_index" && value >= -1) {
       state->load_index = value;
     }
@@ -417,8 +419,8 @@ bool ReadSavedState(const std::string& path, SavedState* state) {
 bool WriteSavedState(const std::string& path, const SavedState& state) {
   char text[128];
   const int n = snprintf(text, sizeof(text),
-      "quality %d\nfrozen %d\nload_index %d\n",
-      state.quality, state.frozen ? 1 : 0, state.load_index);
+      "quality %d\nfrozen %d\nload_index %d\nscale %d\n",
+      state.quality, state.frozen ? 1 : 0, state.load_index, state.scale);
   std::vector<uint8_t> header(text, text + n);
   const std::string temp = path + ".tmp";
   return WriteAll(temp, header, std::vector<uint8_t>(), NULL) &&

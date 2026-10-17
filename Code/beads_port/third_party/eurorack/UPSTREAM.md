@@ -52,4 +52,12 @@ the upstream behaviour:
   to load samples and to save the buffer. `WasteCPUCycles` initialises the
   two new parameters.
 
+Fourth change, pitch quantisation (pearls7):
+
+- `beads/dsp/randomized_parameter.h`: `QuantizeSemitones()` and a
+  `scale_mask` on `RandomizedParameter`. `pitch_value()`, which every grain
+  calls when it starts, snaps the randomised pitch to the scale. A mask of 0
+  (the default; also set in `granular_processor.h`'s `WasteCPUCycles`) is
+  the upstream behaviour.
+
 `git diff --no-index` against the upstream commit shows exactly these edits.
