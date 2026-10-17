@@ -795,6 +795,8 @@ class UserInterface(object):
     #   while pressed, as usual);
     # - the Next LED blinks while a sample is loaded or the buffer saved, then
     #   the encoder LEDs flash green (loaded), blue (saved) or red (failed);
+    #   it blinks slowly while the automatic input gain is measured (5 s
+    #   after start, a new input, or holding Next for 1.5 s);
     # - otherwise the encoder LEDs show the Beads quality colour for 1.5 s
     #   after it changes.
     # Only active for instruments with "ui,pearls" config.
@@ -823,11 +825,14 @@ class UserInterface(object):
         io = int(ch.pearls_io_comm.getState() + 0.5)
         if io == 1:
             self.set_button_led("next", 1.0 if (self.now // 100) % 2 == 0 else 0.0)
+        elif io == 5:
+            # Automatic input gain measuring (as Beads' blinking level LED).
+            self.set_button_led("next", 0.6 if (self.now // 400) % 2 == 0 else 0.0)
         quality = int(ch.pearls_quality_comm.getState()) % 4
         if quality != self.pearls_quality:
             self.pearls_quality = quality
             self.pearls_quality_time = self.now
-        if io >= 2:
+        if 2 <= io <= 4:
             # Loaded, saved, failed.
             r, g, b = [(0, 4095, 0), (0, 0, 4095), (4095, 0, 0)][min(io, 4) - 2]
             for name in ["speed_pos", "speed_neg", "pitch_pos", "pitch_neg"]:

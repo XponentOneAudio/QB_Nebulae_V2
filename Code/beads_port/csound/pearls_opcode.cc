@@ -34,8 +34,11 @@
 //
 // Control inputs are Nebulae channel values (see engine/nebulae_mapping.h),
 // except:
-//   knext   >= 0.5 steps to the next quality setting (the opcode keeps the
-//           quality, and saves it with ifiles = 1);
+//   knext   Next button level, as Beads' quality button: a short press
+//           steps the quality on release (downwards, as Beads), a 1.5 s
+//           press restarts the automatic gain control. Other changes (the
+//           Instr Tester's incrementing file index) each step once. The
+//           opcode keeps the quality, and saves it with ifiles = 1;
 //   ktap    tap tempo button (Record);
 //   kload   any change loads the next WAV file from the Nebulae audio folder
 //           (the USB stick's files) into the buffer, held frozen;
@@ -58,7 +61,8 @@
 // idle), kreserve (buffer overwrite reserve while frozen, 0..1), kquality
 // (0..3), kfrozen (1 = frozen), kclock (1 = tap tempo beat, 0.5 = tap tempo
 // clock running, 0 = off) and kio (0 = idle, 1 = loading or saving,
-// 2 = loaded, 3 = saved, 4 = failed; results stay for 1.5 s).
+// 2 = loaded, 3 = saved, 4 = failed; results stay for 1.5 s; 5 = the
+// automatic gain control is measuring the input).
 
 #include <sched.h>
 #include <time.h>
@@ -110,7 +114,9 @@ const double kMinEolPulse = 0.002;      // s
 // Times below are in audio time (frames rendered), which is real time on
 // the Nebulae and faster when rendering to a file.
 const double kIoResultTime = 1.5;       // s, kio shows the result
-const double kPersistDelay = 3.0;       // s frozen before saving the buffer
+// As Beads: a buffer frozen (by the button or the gate) for 10 s is saved.
+const double kPersistDelay = 10.0;      // s frozen before saving the buffer
+const double kGainRestartPress = 1.5;   // s, Next long press (as Beads)
 const double kStateDelay = 2.0;         // s after a quality change
 // Load/save requests are ignored at first: the Python layer restores the
 // saved secondary button values (e.g. the Next counter) after Csound starts.
@@ -146,7 +152,8 @@ enum IoStatus {
   IO_BUSY,
   IO_LOADED,
   IO_SAVED,
-  IO_FAILED
+  IO_FAILED,
+  IO_GAIN_ADJUSTING
 };
 
 struct GateEdge {
@@ -207,6 +214,10 @@ struct PearlsState {
   int io_status;
   double io_status_time;
   MYFLT previous_load;
+  MYFLT previous_next;
+  bool next_pressed;
+  bool next_long_press;
+  double next_press_time;
   bool previous_save;
 
   PearlsState()
@@ -220,7 +231,8 @@ struct PearlsState {
         persisted_frozen(false), load_requested(false),
         save_requested(false), state_change_time(0.0), state_dirty(false),
         frozen_since(-1.0), io_status(IO_IDLE), io_status_time(0.0),
-        previous_load(0), previous_save(false) { }
+        previous_load(0), previous_next(0), next_pressed(false),
+        next_long_press(false), next_press_time(0.0), previous_save(false) { }
 };
 
 struct PEARLS {
@@ -459,8 +471,8 @@ void UpdateFiles(PearlsState* s, double now) {
   pearls::Engine& engine = s->engine;
   const pearls::Status& status = engine.status();
 
-  // How long the buffer has been frozen by the button (or held).
-  if (status.latched_frozen) {
+  // How long the buffer has been frozen (button, load or gate).
+  if (status.frozen) {
     if (s->frozen_since < 0.0) {
       s->frozen_since = now;
     }
@@ -564,7 +576,7 @@ void UpdateFiles(PearlsState* s, double now) {
       SetIoStatus(s, IO_BUSY, now);
       StartJob(s, TASK_SAVE, JOB_SAVING);
     }
-  } else if (status.latched_frozen && s->frozen_since >= 0.0 &&
+  } else if (status.frozen && s->frozen_since >= 0.0 &&
              now - s->frozen_since >= kPersistDelay &&
              (engine.buffer_generation() != s->persist_generation ||
               !s->persisted_frozen)) {
@@ -572,7 +584,7 @@ void UpdateFiles(PearlsState* s, double now) {
       s->saving_generation = engine.buffer_generation();
       StartJob(s, TASK_PERSIST, JOB_SAVING);
     }
-  } else if (!status.latched_frozen && s->persisted_frozen) {
+  } else if (!status.frozen && s->persisted_frozen) {
     // Released: don't restore this buffer at the next start.
     s->persisted_frozen = false;
     s->state_dirty = true;
@@ -756,9 +768,33 @@ int pearls_perf(CSOUND* csound, PEARLS* p) {
   // Audio time for the controls and files, wall-clock time for the gates.
   const double now = double(s->frame) / pearls::Engine::kSampleRate;
 
-  // Buttons: quality steps, load and save requests.
-  if (*p->knext >= MYFLT(0.5)) {
-    s->quality = (s->quality + 1) % pearls::QUALITY_LAST;
+  // Buttons: quality steps, gain restart, load and save requests.
+  const MYFLT next = *p->knext;
+  int quality_steps = 0;
+  if (next != s->previous_next) {
+    if (s->previous_next == MYFLT(0) && next == MYFLT(1)) {
+      s->next_pressed = true;
+      s->next_long_press = false;
+      s->next_press_time = now;
+    } else if (next == MYFLT(0) && s->next_pressed) {
+      quality_steps += s->next_long_press ? 0 : 1;
+      s->next_pressed = false;
+    } else {
+      // An incrementing index (Instr Tester): every change is a press.
+      quality_steps += (s->next_pressed && !s->next_long_press) ? 2 : 1;
+      s->next_pressed = false;
+    }
+    s->previous_next = next;
+  }
+  if (s->next_pressed && !s->next_long_press &&
+      now - s->next_press_time >= kGainRestartPress) {
+    s->next_long_press = true;
+    s->engine.RestartGainControl();
+  }
+  if (quality_steps) {
+    // Downwards, as the Beads quality button.
+    s->quality = (s->quality + quality_steps * (pearls::QUALITY_LAST - 1)) %
+        pearls::QUALITY_LAST;
     s->wanted.quality = s->quality;
     s->state_dirty = true;
     s->state_change_time = now;
@@ -852,7 +888,8 @@ int pearls_perf(CSOUND* csound, PEARLS* p) {
   *p->kclock = status.clock_led
       ? MYFLT(1)
       : (status.clock_running ? MYFLT(0.5) : MYFLT(0));
-  *p->kio = MYFLT(s->io_status);
+  *p->kio = MYFLT(s->io_status == IO_IDLE && status.gain_adjusting
+      ? int(IO_GAIN_ADJUSTING) : s->io_status);
   return OK;
 }
 

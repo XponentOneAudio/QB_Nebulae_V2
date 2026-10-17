@@ -118,9 +118,9 @@ def main():
     if rms < 0.01:
         ok = False
         print("FAIL: silent output")
-    if qualities[3 * kr] != 3 or qualities[-1] != 0:
+    if qualities[3 * kr] != 3 or qualities[-1] != 2:
         ok = False
-        print("FAIL: Next should step quality from digital (3) to dirty tape (0)")
+        print("FAIL: Next should step quality from hi-fi (3) to cold digital (2)")
     if max(seed_leds) < 1.0:
         ok = False
         print("FAIL: no grain activity reported")

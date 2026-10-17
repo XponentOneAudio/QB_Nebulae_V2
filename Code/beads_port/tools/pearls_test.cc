@@ -374,9 +374,25 @@ void TestSeedButton() {
   Run(&engine, 0.5f, InputFn(),
       [](size_t i, Controls* c) { c->seed_button = i < 4800; });
   CHECK(!engine.status().seed_locked, "short press unlocks");
-  Run(&engine, 2.0f, InputFn(),
-      [](size_t i, Controls* c) { c->seed_button = i < 1.7f * 48000; });
-  CHECK(engine.status().seed_locked, "1.5 s press relocks");
+  // As Beads: a 4 s press relocks when released.
+  Run(&engine, 4.5f, InputFn(),
+      [](size_t i, Controls* c) { c->seed_button = i < 4.3f * 48000; });
+  CHECK(engine.status().seed_locked, "4 s press relocks");
+  Run(&engine, 0.5f, InputFn(),
+      [](size_t i, Controls* c) { c->seed_button = i < 4800; });
+  Run(&engine, 2.5f, InputFn(),
+      [](size_t i, Controls* c) { c->seed_button = i < 2.0f * 48000; });
+  CHECK(!engine.status().seed_locked, "2 s press does not relock");
+  // SEED + FREEZE relocks, and that FREEZE press doesn't freeze.
+  Run(&engine, 1.0f, InputFn(),
+      [](size_t i, Controls* c) {
+        c->seed_button = i > 4800 && i < 24000;
+        c->freeze = i > 12000;
+      });
+  CHECK(engine.status().seed_locked, "SEED + FREEZE relocks");
+  CHECK(!engine.status().frozen, "the combo's FREEZE press is ignored");
+  Run(&engine, 0.2f, InputFn(), [](size_t, Controls* c) { c->freeze = false; });
+  CHECK(engine.status().frozen, "the next FREEZE press freezes");
 }
 
 void TestNoInputIsSilent() {
@@ -502,7 +518,7 @@ void TestBufferTransfers() {
       CHECK(FinishTransfer(&engine, c, 2.0f, &during), "%s mono=%d: load "
             "does not finish", kQualityNames[quality], mono);
       engine.EndTransfer();
-      CHECK(engine.status().held, "held after load");
+      CHECK(engine.status().latched_frozen, "frozen after load");
 
       std::vector<float> saved_l(Engine::MaxBufferFrames());
       std::vector<float> saved_r(Engine::MaxBufferFrames());
@@ -590,8 +606,61 @@ void TestBufferTransfers() {
          engine.saved_frames(), f);
 }
 
+void TestFreezeProtectsBuffer() {
+  printf("quality, mono and synth changes wait while frozen (as Beads)\n");
+  Engine engine;
+  engine.Init();
+  Controls c;
+  c.SetDefaults();
+  c.dry_wet = 1.0f;
+  c.density = 0.85f;
+  c.time = 0.1f;
+  c.gain = 1;
+  Run(&engine, 2.0f, [](size_t i, int) { return Sine(i, 440.0f, 0.4f); },
+      [&](size_t, Controls* x) { *x = c; });
+  c.freeze = true;
+  Idle(&engine, c, 0.1f);
+  const uint32_t generation = engine.buffer_generation();
+  c.quality = QUALITY_DIRTY_TAPE;
+  c.mono = true;
+  std::vector<float> out;
+  FinishTransfer(&engine, c, 2.0f, &out);
+  CHECK(engine.buffer_generation() == generation, "buffer kept while frozen");
+  CHECK(Rms(out, 1.0f, 2.0f) > 0.05f, "still playing (%f)",
+        Rms(out, 1.0f, 2.0f));
+  std::vector<float> saved_l(Engine::MaxBufferFrames());
+  std::vector<float> saved_r(Engine::MaxBufferFrames());
+  engine.StartSave(&saved_l[0], &saved_r[0], saved_l.size());
+  FinishTransfer(&engine, c, 1.0f);
+  engine.EndTransfer();
+  CHECK(engine.saved_sample_rate() == 48000.0f && !engine.saved_mono(),
+        "still digital stereo while frozen");
+  c.freeze = false;
+  Idle(&engine, c, 0.2f);
+  engine.StartSave(&saved_l[0], &saved_r[0], saved_l.size());
+  FinishTransfer(&engine, c, 1.0f);
+  engine.EndTransfer();
+  CHECK(engine.saved_sample_rate() == 24000.0f && engine.saved_mono(),
+        "applied once unfrozen");
+}
+
+void TestGainRestart() {
+  printf("automatic gain control restart\n");
+  Engine engine;
+  engine.Init();
+  Controls c;
+  c.SetDefaults();
+  Run(&engine, 8.0f, [](size_t i, int) { return Sine(i, 440.0f, 0.1f); },
+      [&](size_t, Controls* x) { *x = c; });
+  CHECK(!engine.status().gain_adjusting, "settled after 8 s");
+  engine.RestartGainControl();
+  Run(&engine, 1.0f, [](size_t i, int) { return Sine(i, 440.0f, 0.1f); },
+      [&](size_t, Controls* x) { *x = c; });
+  CHECK(engine.status().gain_adjusting, "measuring again after a restart");
+}
+
 void TestHoldRelease() {
-  printf("a loaded buffer stays frozen until Freeze is released\n");
+  printf("a loaded buffer is frozen as if FREEZE were pressed\n");
   for (int freeze_first = 0; freeze_first < 2; ++freeze_first) {
     Engine engine;
     engine.Init();
@@ -607,46 +676,18 @@ void TestHoldRelease() {
     CHECK(engine.status().frozen && engine.status().latched_frozen,
           "frozen after load");
     const uint32_t generation = engine.buffer_generation();
-    if (freeze_first) {
-      c.freeze = false;  // release
-    } else {
-      c.freeze = true;   // engage...
-      Idle(&engine, c, 0.1f);
-      CHECK(engine.status().frozen, "still frozen with Freeze on");
-      c.freeze = false;  // ...and release
-    }
+    Idle(&engine, c, 0.5f);
+    CHECK(engine.buffer_generation() == generation, "buffer unchanged");
+    c.freeze = !c.freeze;  // one press releases it
     Idle(&engine, c, 0.1f);
-    CHECK(!engine.status().frozen && !engine.status().held,
-          "freeze_first=%d: released", freeze_first);
+    CHECK(!engine.status().frozen, "freeze_first=%d: released", freeze_first);
     CHECK(engine.buffer_generation() != generation,
           "recording again changes the buffer");
+    c.freeze = !c.freeze;  // the next one freezes
+    Idle(&engine, c, 0.1f);
+    CHECK(engine.status().frozen, "freeze_first=%d: frozen again",
+          freeze_first);
   }
-
-  // The freeze gate releases it too; the buffer doesn't change while held.
-  Engine engine;
-  engine.Init();
-  Controls c;
-  c.SetDefaults();
-  Idle(&engine, c, 0.1f);
-  std::vector<float> l(48000, 0.25f), r(48000, 0.25f);
-  engine.StartLoad(&l[0], &r[0], l.size(), 48000.0f, true);
-  FinishTransfer(&engine, c, 1.0f);
-  engine.EndTransfer();
-  const uint32_t generation = engine.buffer_generation();
-  Idle(&engine, c, 0.5f);
-  CHECK(engine.buffer_generation() == generation, "held buffer unchanged");
-  float in[64] = { 0 }, out_l[64], out_r[64];
-  uint8_t high[64], low[64];
-  memset(high, 1, sizeof(high));
-  memset(low, 0, sizeof(low));
-  for (int i = 0; i < 100; ++i) {
-    engine.Process(c, in, in, high, NULL, out_l, out_r, NULL, 64);
-  }
-  CHECK(engine.status().held, "held while the gate is high");
-  for (int i = 0; i < 100; ++i) {
-    engine.Process(c, in, in, low, NULL, out_l, out_r, NULL, 64);
-  }
-  CHECK(!engine.status().held, "released by the gate");
 }
 
 void TestTapTempo() {
@@ -961,6 +1002,8 @@ int main() {
   TestSeedButton();
   TestNoInputIsSilent();
   TestFreeze();
+  TestFreezeProtectsBuffer();
+  TestGainRestart();
   TestSeedInput();
   TestVintageDelayKeepsPitch();
   TestQualitySwitching();

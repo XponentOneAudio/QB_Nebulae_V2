@@ -42,7 +42,7 @@ namespace {
 const size_t kDelayRegionSize = 256 * 1024;
 const size_t kReverbBufferSize = 32768;
 
-const float kSeedLongPressTime = 1.5f;      // s, seed button relocks
+const float kSeedLongPressTime = 4.0f;      // s, seed button relocks
 const float kSeedPatchTimeout = 4.0f;       // s without edges = unpatched
 const size_t kSeedDelay = 120;              // 2.5 ms at 48 kHz, as Beads
 const float kFadeOutTime = 0.01f;           // s, before reconfiguring
@@ -167,7 +167,7 @@ bool Engine::Init() {
 
   seed_locked_ = true;
   seed_pressed_ = false;
-  seed_long_press_handled_ = false;
+  seed_combo_ = false;
   seed_press_duration_ = 0;
 
   seed_gate_previous_ = false;
@@ -185,8 +185,11 @@ bool Engine::Init() {
   status_.seed_locked = true;
   status_.overwrite_reserve = 1.0f;
 
-  hold_ = false;
-  freeze_previous_ = false;
+  freeze_inverted_ = false;
+  freeze_button_previous_ = false;
+  frozen_previous_block_ = false;
+  configured_ = false;
+  restart_gain_pending_ = false;
 
   tap_previous_ = false;
   tap_press_duration_ = 0;
@@ -299,9 +302,11 @@ void Engine::ContinueTransfer() {
       processor_->WriteBuffer(frame);
     }
     if (transfer_frames_ >= transfer_target_frames_) {
-      hold_ = transfer_hold_;
-      // A freeze already engaged releases the hold when it is released.
-      freeze_previous_ = controls_.freeze;
+      // As if the FREEZE button had been pressed (Beads restores its
+      // backed-up buffer that way): one press releases it.
+      if (transfer_hold_ && !(controls_.freeze != freeze_inverted_)) {
+        freeze_inverted_ = !freeze_inverted_;
+      }
       ++buffer_generation_;
       transfer_state_ = TRANSFER_DONE;
     }
@@ -440,23 +445,32 @@ void Engine::Process(
   }
 }
 
-void Engine::UpdateSeedButton(bool pressed) {
+void Engine::UpdateSeedButton(bool pressed, bool freeze_toggled) {
   // beads/ui.cc: pressing SEED unlocks the generator and seeds while held;
-  // a long press locks it again.
+  // releasing it after a 4 s press locks it again. SEED + FREEZE locks it
+  // too (and the FREEZE press is not a freeze toggle): seed_combo_ then
+  // ignores SEED until it is released.
   if (pressed && !seed_pressed_) {
     seed_locked_ = false;
     seed_press_duration_ = 0;
-    seed_long_press_handled_ = false;
+    seed_combo_ = false;
   }
   if (pressed) {
     seed_press_duration_ += kBlockSize;
-    if (!seed_long_press_handled_ &&
-        seed_press_duration_ >= Seconds(kSeedLongPressTime)) {
+    if (freeze_toggled && !seed_combo_) {
       seed_locked_ = true;
-      seed_long_press_handled_ = true;
+      seed_combo_ = true;
+      freeze_inverted_ = !freeze_inverted_;
     }
+  } else if (seed_pressed_ && !seed_combo_ &&
+             seed_press_duration_ >= Seconds(kSeedLongPressTime)) {
+    seed_locked_ = true;
   }
   seed_pressed_ = pressed;
+}
+
+void Engine::RestartGainControl() {
+  restart_gain_pending_ = true;
 }
 
 void Engine::UpdateConfiguration() {
@@ -465,13 +479,33 @@ void Engine::UpdateConfiguration() {
   const bool mono = controls_.mono;
   const bool synth = controls_.synth;
 
+  if (!configured_) {
+    // The first settings take effect at once (e.g. a saved quality setting),
+    // even if the buffer starts frozen.
+    configured_ = true;
+    if (synth != synth_mode_ || Processor::Media(quality) !=
+        processor_->media() || mono != processor_->mono()) {
+      target_quality_ = quality;
+      target_mono_ = mono;
+      target_synth_ = synth;
+      reset_gain_pending_ = true;
+      ApplyConfiguration();
+    }
+  }
+
+  // As Beads: quality, mono and synth mode changes wait while the buffer is
+  // frozen (they would clear it).
+  const bool deferred = frozen_previous_block_ && !reconfigure_pending_;
+
   // In synth mode the quality setting only selects the wavetable resolution,
   // which the synth reads directly: no reconfiguration needed (as Beads).
   const bool needs_reconfiguration = synth != synth_mode_ || (!synth && (
       Processor::Media(quality) != processor_->media() ||
       mono != processor_->mono()));
 
-  if (needs_reconfiguration) {
+  if (deferred) {
+    // Nothing to reconfigure for now.
+  } else if (needs_reconfiguration) {
     if (!reconfigure_pending_) {
       reset_gain_pending_ = mono != processor_->mono() || synth_mode_;
     }
@@ -516,7 +550,6 @@ void Engine::ApplyConfiguration() {
   seed_flags_previous_32k_ = GATE_FLAG_LOW;
   // The processor cleared its buffer: start transfers again.
   transfer_started_ = false;
-  hold_ = false;
   ++buffer_generation_;
 }
 
@@ -655,7 +688,6 @@ void Engine::ProcessAudio(
 }
 
 void Engine::RenderBlock() {
-  UpdateSeedButton(controls_.seed_button);
   UpdateConfiguration();
 
   FloatFrame in[kBlockSize];
@@ -664,18 +696,13 @@ void Engine::RenderBlock() {
   GateFlags seed[kBlockSize];
   bool gate[kBlockSize];
 
-  // Freeze: button, gate, held after a load (until the button or gate is
-  // released), and always while loading so that the input is not recorded
-  // over the loaded frames.
-  bool freeze_gate_block = false;
-  for (size_t i = 0; i < kBlockSize; ++i) {
-    freeze_gate_block = freeze_gate_block || freeze_fifo_[i];
-  }
-  const bool freeze_now = controls_.freeze || freeze_gate_block;
-  if (hold_ && freeze_previous_ && !freeze_now) {
-    hold_ = false;
-  }
-  freeze_previous_ = freeze_now;
+  // Freeze: the button (whose state a load, a restore or the SEED + FREEZE
+  // combo can invert), the gate, and always while loading so that the
+  // input is not recorded over the loaded frames.
+  const bool freeze_toggled = controls_.freeze != freeze_button_previous_;
+  freeze_button_previous_ = controls_.freeze;
+  UpdateSeedButton(controls_.seed_button, freeze_toggled);
+  const bool freeze_button = controls_.freeze != freeze_inverted_;
   const bool loading = transfer_state_ == TRANSFER_LOADING;
 
   bool freeze_block = false;
@@ -683,7 +710,7 @@ void Engine::RenderBlock() {
   for (size_t i = 0; i < kBlockSize; ++i) {
     in[i].l = in_fifo_l_[i];
     in[i].r = in_fifo_r_[i];
-    freeze[i] = controls_.freeze || hold_ || loading || freeze_fifo_[i];
+    freeze[i] = freeze_button || loading || freeze_fifo_[i];
     freeze_block = freeze_block || freeze[i];
     recorded = recorded || !freeze[i];
     gate[i] = false;
@@ -724,7 +751,7 @@ void Engine::RenderBlock() {
 
   const SeedButtonState seed_state = seed_locked_
       ? SEED_BUTTON_STATE_LOCKED
-      : (seed_pressed_ && !seed_long_press_handled_
+      : (seed_pressed_ && !seed_combo_
             ? SEED_BUTTON_STATE_ON
             : SEED_BUTTON_STATE_OFF);
 
@@ -744,6 +771,11 @@ void Engine::RenderBlock() {
   } else {
     DetectInput(in, kBlockSize);
     const bool absent = !status_.input_present;
+    if (restart_gain_pending_) {
+      restart_gain_pending_ = false;
+      gain_control_.Init(float(kSampleRate),
+                         SoftClippingModeForQuality(target_quality_), true);
+    }
     gain_control_.Process(
         fade_ >= 1.0f,
         controls_.gain,
@@ -777,8 +809,9 @@ void Engine::RenderBlock() {
   status_.seed_locked = seed_locked_;
   status_.seed_led = seed_led_time_ > 0;
   status_.frozen = freeze_block;
-  status_.held = hold_;
-  status_.latched_frozen = controls_.freeze || hold_;
+  status_.latched_frozen = freeze_button;
+  status_.gain_adjusting = !synth_mode_ && gain_control_.adjusting();
+  frozen_previous_block_ = freeze_block;
   status_.clock_running = clock_running_;
   status_.clock_led = clock_led_time_ > 0;
   status_.overwrite_reserve = synth_mode_

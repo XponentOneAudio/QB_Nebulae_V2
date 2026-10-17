@@ -41,11 +41,13 @@
 
 namespace pearls {
 
+// Beads "media" settings. The Beads manual's names are in quotes; its
+// quality button steps downwards (3, 2, 1, 0, 3...).
 enum Quality {
-  QUALITY_DIRTY_TAPE,       // Beads "media" 0: 8-bit mu-law, wow & flutter
-  QUALITY_CLEAN_TAPE,       // 1: 12-bit at 24 kHz
-  QUALITY_VINTAGE_DIGITAL,  // 2: 12-bit at 32 kHz
-  QUALITY_DIGITAL,          // 3: 16-bit at 48 kHz
+  QUALITY_DIRTY_TAPE,       // 0 "Scorched cassette": 8-bit mu-law, wow & flutter
+  QUALITY_CLEAN_TAPE,       // 1 "Sunny tape": 12-bit at 24 kHz
+  QUALITY_VINTAGE_DIGITAL,  // 2 "Cold digital": 12-bit at 32 kHz (Clouds)
+  QUALITY_DIGITAL,          // 3 Hi-fi: 16-bit at 48 kHz
   QUALITY_LAST
 };
 
@@ -95,8 +97,8 @@ struct Status {
   float overwrite_reserve;
   uint8_t vu_meter;
 
-  bool held;             // frozen after loading a buffer, until released
-  bool latched_frozen;   // frozen by the button or held (not by the gate)
+  bool latched_frozen;   // frozen by the button (or a load), not the gate
+  bool gain_adjusting;   // automatic gain control measuring the input
   bool clock_running;    // tap tempo clock
   bool clock_led;        // tap tempo clock beat
 };
@@ -143,6 +145,10 @@ class Engine {
 
   const Status& status() const { return status_; }
 
+  // Restarts the automatic gain control's measurement of the input level
+  // (Beads: long press on the quality button).
+  void RestartGainControl();
+
   // Buffer transfers. They run over several Process() calls, in chunks small
   // enough for an audio thread; the arrays must stay valid until
   // transfer_state() is TRANSFER_DONE (then call EndTransfer()).
@@ -150,8 +156,8 @@ class Engine {
   // StartLoad fills the recording buffer with `frames` frames at
   // `sample_rate`, converted to the rate of the current quality setting and
   // truncated to the buffer length. The output is muted meanwhile. With
-  // `hold`, the buffer is then held frozen until the freeze button or gate
-  // is next released.
+  // `hold`, the buffer is then frozen as if the FREEZE button had been
+  // pressed: the next press releases it.
   bool StartLoad(const float* l, const float* r, size_t frames,
                  float sample_rate, bool hold);
   // StartSave copies the buffer contents, oldest frame first, into arrays of
@@ -175,7 +181,7 @@ class Engine {
   void RenderBlock();
   void UpdateTapClock(bool* pulses);
   void ContinueTransfer();
-  void UpdateSeedButton(bool pressed);
+  void UpdateSeedButton(bool pressed, bool freeze_toggled);
   void UpdateConfiguration();
   void ApplyConfiguration();
   void DetectInput(const beads::FloatFrame* in, size_t size);
@@ -229,7 +235,7 @@ class Engine {
   // Seed button state machine (as beads/ui.cc).
   bool seed_locked_;
   bool seed_pressed_;
-  bool seed_long_press_handled_;
+  bool seed_combo_;
   size_t seed_press_duration_;
 
   // Seed gate: patch detection by activity, 2.5 ms delay, gate flags.
@@ -247,9 +253,13 @@ class Engine {
   // Grain gate LED stretcher.
   size_t seed_led_time_;
 
-  // Held freeze (after a load) and freeze release detection.
-  bool hold_;
-  bool freeze_previous_;
+  // FREEZE button state, inverted by loads and the SEED + FREEZE combo.
+  bool freeze_inverted_;
+  bool freeze_button_previous_;
+  // Configuration changes wait while frozen.
+  bool frozen_previous_block_;
+  bool configured_;
+  bool restart_gain_pending_;
 
   // Tap tempo clock.
   bool tap_previous_;

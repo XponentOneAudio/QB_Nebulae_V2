@@ -6,7 +6,7 @@ sr,48000
 freeze,latching,rising
 reset,momentary,rising
 source,latching,falling
-file,triggered,falling
+file,momentary,rising
 record,momentary,rising
 ignoregate,freeze,reset
 ignorealtgate,reset,file
@@ -34,10 +34,14 @@ nebconfigend
 ;   Blend          (+CV)            DRY/WET
 ;   Speed encoder  (+CV)            REVERB (clockwise from speed 0)
 ;   Freeze button / gate            FREEZE (gate: frozen while high)
-;   Reset button                    SEED (tap = grain; hold 1.5 s = re-lock)
+;   Reset button                    SEED (tap = grain; hold 4 s and release
+;                                   = re-lock; Reset + Freeze = re-lock)
 ;   Reset gate                      SEED input (clock/trigger grains)
-;   Next button / gate              QUALITY: dirty tape, clean tape,
-;                                   vintage digital, digital (remembered)
+;   Next button / gate              QUALITY (on release, as Beads): hi-fi ->
+;                                   cold digital -> sunny tape -> scorched
+;                                   cassette (remembered; waits while
+;                                   frozen). Hold 1.5 s: restart the
+;                                   automatic input gain
 ;   Source button / gate            wavetable synth mode on/off
 ;   Record button                   tap tempo: tap twice or more to clock
 ;                                   the grains (or delay) at that tempo;
@@ -54,13 +58,14 @@ nebconfigend
 ;                                   variations, on = sparse jumps
 ;   Record                          mono buffer (left input, twice as long)
 ;   Next                            load the next WAV file from the USB
-;                                   stick into the buffer (held frozen
-;                                   until Freeze is released)
+;                                   stick into the buffer (frozen, as if
+;                                   Freeze were pressed)
 ;   Reset                           save the buffer to the USB stick
 ;                                   (pearls_001.wav, pearls_002.wav...)
 ;
-; A buffer frozen with the Freeze button for 3 seconds, and the quality
-; setting, are remembered across power cycles.
+; As on Beads, a buffer frozen for 10 seconds is remembered across power
+; cycles (it comes back frozen), and quality, mono and synth mode changes
+; wait while the buffer is frozen. The quality setting is remembered too.
 ;
 ; Note: don't set "_alt" buttons in the config chunk above (e.g.
 ; "freeze_alt,latching,rising"): Nebulae reads "_alt" config lines as default
@@ -70,15 +75,11 @@ nebconfigend
 
 instr 1
 ainl, ainr inch 1, 2
-kprevfile init 0
 
-; Next (button or gate) steps through the four Beads quality settings.
-; Counts increases of the "file" channel: the Nebulae sends 0/1 pulses, the
-; Qu-Bit Instr Tester an incrementing file index. (No if/then: see README.)
-knext = limit(gkfilesel - kprevfile, 0, 1)
-kprevfile = gkfilesel
+; Next (gkfilesel) goes to the opcode as is: the button level on the
+; Nebulae (momentary), an incrementing file index in the Qu-Bit Instr Tester.
 
-aL, aR, kgate, kseedled, kreserve, kquality, kfrozen, kclock, kio pearls ainl, ainr, gkloopstart, gkloopsize, gkwindow, gkdensity, gkpitch, gkspeed, gkoverlap, gkblend, gkloopstart_alt, gkloopsize_alt, gkwindow_alt, gkpitch_alt, gkdensity_alt, gkoverlap_alt, gkblend_alt, gkfreeze, gkreset, gksource, knext, gkrecord_alt, gkfreeze_alt, gkrecord, gkfile_alt, gkreset_alt, 1, 1
+aL, aR, kgate, kseedled, kreserve, kquality, kfrozen, kclock, kio pearls ainl, ainr, gkloopstart, gkloopsize, gkwindow, gkdensity, gkpitch, gkspeed, gkoverlap, gkblend, gkloopstart_alt, gkloopsize_alt, gkwindow_alt, gkpitch_alt, gkdensity_alt, gkoverlap_alt, gkblend_alt, gkfreeze, gkreset, gksource, gkfilesel, gkrecord_alt, gkfreeze_alt, gkrecord, gkfile_alt, gkreset_alt, 1, 1
 
 outs aL, aR
 

@@ -52,10 +52,10 @@ TIMELINE = [
     (0.0, "gkpitch_alt", 0.3),
     (0.0, "gkoverlap_alt", 0.3),  # some reversed grains
     (0.0, "gkblend_alt", 0.5),    # stereo spread
-    (3.0, "gkfilesel", 1),       # Next: digital -> dirty tape
-    (3.02, "gkfilesel", 0),
-    (5.0, "gkfilesel", 1),       # Next: -> clean tape
-    (5.02, "gkfilesel", 0),
+    (3.0, "gkfilesel", 1),       # Next: hi-fi -> cold digital
+    (3.1, "gkfilesel", 0),
+    (5.0, "gkfilesel", 1),       # Next: -> sunny tape (24 kHz)
+    (5.1, "gkfilesel", 0),
     (6.0, "gkfreeze", 1),
     (8.0, "gkfreeze", 0),
     (8.0, "gkloopsize", 1.0),    # delay mode
@@ -70,8 +70,10 @@ TIMELINE = [
     (14.55, "gkrecord", 0),
     (15.0, "gkrecord", 1),
     (15.05, "gkrecord", 0),
+    (16.0, "gkfilesel", 1),      # Next held 2 s: restart the input gain
+    (18.0, "gkfilesel", 0),
 ]
-DURATION = 18.0
+DURATION = 25.0                  # the frozen buffer is saved after 10 s
 
 # Second run: a cold start with silent input.
 RESTORE_TIMELINE = [t for t in TIMELINE if t[0] == 0.0]
@@ -251,11 +253,17 @@ def main():
             ok = False
             print("  FAIL: " + message)
 
-    # Next at 3 s and 5 s: digital (3) -> dirty tape (0) -> clean tape (1).
+    # Next at 3 s and 5 s: hi-fi (3) -> cold digital (2) -> sunny tape (1).
+    # The Instr Tester's index can't tell a press from a hold: its first
+    # press (held until the next one) restarts the gain instead, and the
+    # "long press" at 16 s is one more press there.
+    increment = args.next_style == "increment"
     qualities = [int(q[0]) for q in status]
     steps = [q for i, q in enumerate(qualities) if i == 0 or q != qualities[i - 1]]
     print("  quality sequence: %s" % steps)
-    check(steps == [3, 0, 1], "Next should step quality 3 -> 0 -> 1")
+    want_steps = [3, 2, 1]
+    check(steps == want_steps, "Next should step quality %s" % want_steps)
+    final_quality = 1
     for label, t0, t1 in [("digital granular", 1.5, 3.0), ("dirty tape", 3.5, 5.0),
                           ("clean tape", 5.5, 6.0), ("frozen", 6.5, 8.0),
                           ("delay mode", 9.0, 10.0), ("synth", 10.5, 12.0),
@@ -274,6 +282,9 @@ def main():
     check(status_at(13.0)[1] == 1, "held frozen after the load")
     check(any(st[3] == 3 for st in status[27:32]), "save reported (io = 3)")
     check(status_at(17.0)[2] > 0, "tap tempo clock running")
+    if not increment:
+        check(any(st[3] == 5 for st in status[36:46]),
+              "Next held 1.5 s restarts the input gain (io = 5)")
     saved = os.path.join(root, "mnt/memory/pearls_001.wav")
     check(os.path.exists(saved), "pearls_001.wav on the USB stick")
     check(os.path.exists(os.path.join(root, "home/alarm/audio/pearls_001.wav")),
@@ -281,14 +292,16 @@ def main():
     if os.path.exists(saved):
         info = wav_info(saved)
         print("  saved WAV: %d channel(s), %d Hz, %d frames" % info)
-        # Clean tape (24 kHz), the 1.5 s sample.
-        check(info[1] == 24000 and abs(info[2] - 36000) < 10,
-              "saved WAV should hold the 1.5 s sample at 24 kHz")
+        # The 1.5 s sample at the buffer rate: sunny tape 24 kHz, or cold
+        # digital 32 kHz (Instr Tester sequence).
+        rate = 32000 if increment else 24000
+        check(info[1] == rate and abs(info[2] - 1.5 * rate) < 10,
+              "saved WAV should hold the 1.5 s sample at %d Hz" % rate)
     state_file = os.path.join(root, "home/alarm/pearls/state.txt")
     state = open(state_file).read().split() if os.path.exists(state_file) else []
     print("  state.txt: %s" % " ".join(state))
-    check("quality" in state and state[state.index("quality") + 1] == "1",
-          "quality 1 remembered")
+    check("quality" in state and state[state.index("quality") + 1] == str(final_quality),
+          "quality %d remembered" % final_quality)
     check("frozen" in state and state[state.index("frozen") + 1] == "1",
           "frozen buffer remembered")
     check(os.path.exists(os.path.join(root, "home/alarm/pearls/buffer.wav")),
@@ -301,7 +314,7 @@ def main():
         return 1
     level = rms(audio2, 2.0, 4.0)
     print("  after restart: status %s, rms %.3f (silent input)" % (status2[-1], level))
-    check(status2 and status2[0][0] == 1, "quality restored")
+    check(status2 and status2[0][0] == final_quality, "quality restored")
     check(status2 and status2[-1][1] == 1, "buffer restored frozen")
     check(level >= 0.01, "restored buffer plays")
 

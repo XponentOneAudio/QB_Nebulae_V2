@@ -419,3 +419,13 @@ guide is `README.md`.
   and the state file is parsed without `sscanf`, which glibc 2.38 headers
   redirect to `__isoc23_sscanf`. `tools/build_prebuilt.sh` still rejects any
   binary that needs more than glibc 2.17.
+
+pearls6 aligned the controls with the Beads manual and firmware
+(`beads/ui.cc`, `beads/beads.cc`, `beads/background_buffer_backup.cc`):
+- **Seed re-lock:** a 4 s press, acted on at release, plus SEED + FREEZE.
+- **Configuration changes ignored while frozen** (`should_ignore_state_change`).
+- **Buffer backup after 10 s frozen**, by the button or the gate. The buffer
+  is restored with the FREEZE button state on: the engine inverts its view of
+  the Nebulae's latching Freeze channel, so one press releases it.
+- **Quality button:** steps downwards on release; a 1.5 s press restarts the
+  automatic gain control.
