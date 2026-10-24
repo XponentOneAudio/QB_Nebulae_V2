@@ -33,6 +33,13 @@ sh /home/alarm/QB_Nebulae_V2/Code/scripts/mountfs.sh rw
 sudo python2 /home/alarm/QB_Nebulae_V2/Code/nebulae/check_calibration.py
 sh /home/alarm/QB_Nebulae_V2/Code/scripts/mountfs.sh ro
 
+# Pearls (Beads port): installs its Csound plugin after a firmware update.
+# Does nothing on later boots. Hard 3-minute limit: never blocks booting.
+if [ -f /home/alarm/QB_Nebulae_V2/Code/beads_port/boot_install.sh ]
+then
+    timeout -k 10 180 bash /home/alarm/QB_Nebulae_V2/Code/beads_port/boot_install.sh < /dev/null
+fi
+
 sudo pkill -1 -f /home/alarm/QB_Nebulae_V2/Code/nebulae/bootleds.py
 
 echo "Running Nebulae"

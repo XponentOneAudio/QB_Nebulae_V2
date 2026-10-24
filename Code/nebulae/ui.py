@@ -75,6 +75,11 @@ class UserInterface(object):
         self.ignore_next_speed_click = False
         self.clearAllLEDs()
         self.restoreDefaultsFlag = False
+        # Pearls (Beads port) LED feedback state.
+        self.pearls_quality = -1
+        self.pearls_quality_time = 0
+        self.pearls_scale = -1
+        self.pearls_scale_time = -10000
 
     def update(self):
         self.now = int(round(time.time() * 1000))
@@ -160,6 +165,8 @@ class UserInterface(object):
 
         self.update_speed(self.mode)
         self.update_pitch(self.mode)
+        if self.mode == "normal":
+            self.update_pearls_leds()
     
     def clearAllLEDs(self):
         self.set_rgb("pitch_pos", 4095, 4095, 4095, 0.0)
@@ -780,6 +787,83 @@ class UserInterface(object):
                 else:
                     self.controlhandler.enterNormalMode()
         self.set_pitch_leds(mode)
+
+    # Pearls (Beads port, see Code/beads_port):
+    # - the Reset LED shows grain activity like the Beads seed LED (dim while
+    #   the generator is locked and idle);
+    # - the Freeze LED shows whether the buffer is frozen (also by the gate,
+    #   or held after loading a sample);
+    # - the Record LED blinks with the tap tempo clock (otherwise it lights
+    #   while pressed, as usual);
+    # - the Next LED blinks while a sample is loaded or the buffer saved, then
+    #   the encoder LEDs flash green (loaded), blue (saved) or red (failed);
+    #   it blinks slowly while the automatic input gain is measured (5 s
+    #   after start, a new input, or holding Next for 1.5 s);
+    # - otherwise the encoder LEDs show the Beads quality colour for 1.5 s
+    #   after it changes, and the Pitch encoder LEDs (only) show the pitch
+    #   quantisation scale colour for 1.5 s after it changes.
+    # Only active for instruments with "ui,pearls" config.
+    def update_pearls_leds(self):
+        ch = self.controlhandler
+        if getattr(ch, "pearls_quality_comm", None) is None:
+            return
+        ch.pearls_quality_comm.update()
+        ch.pearls_seedled_comm.update()
+        ch.pearls_frozen_comm.update()
+        ch.pearls_clock_comm.update()
+        ch.pearls_io_comm.update()
+        ch.pearls_scale_comm.update()
+        seed = ch.pearls_seedled_comm.getState()
+        if seed >= 1.0:
+            self.set_button_led("reset", 1.0)
+        elif seed > 0.0:
+            self.set_button_led("reset", 0.15)
+        else:
+            self.set_button_led("reset", 0.0)
+        self.set_button_led("freeze", 1.0 if ch.pearls_frozen_comm.getState() >= 0.5 else 0.0)
+        clock = ch.pearls_clock_comm.getState()
+        if clock >= 1.0:
+            self.set_button_led("record", 1.0)
+        elif clock > 0.0:
+            self.set_button_led("record", 0.1)
+        io = int(ch.pearls_io_comm.getState() + 0.5)
+        if io == 1:
+            self.set_button_led("next", 1.0 if (self.now // 100) % 2 == 0 else 0.0)
+        elif io == 5:
+            # Automatic input gain measuring (as Beads' blinking level LED).
+            self.set_button_led("next", 0.6 if (self.now // 400) % 2 == 0 else 0.0)
+        quality = int(ch.pearls_quality_comm.getState()) % 4
+        if quality != self.pearls_quality:
+            self.pearls_quality = quality
+            self.pearls_quality_time = self.now
+        scale = int(ch.pearls_scale_comm.getState() + 0.5) % 8
+        if scale != self.pearls_scale:
+            # The first value read (before Csound sets it) is not shown.
+            if self.pearls_scale != -1:
+                self.pearls_scale_time = self.now
+            self.pearls_scale = scale
+        if 2 <= io <= 4:
+            # Loaded, saved, failed.
+            r, g, b = [(0, 4095, 0), (0, 0, 4095), (4095, 0, 0)][min(io, 4) - 2]
+            for name in ["speed_pos", "speed_neg", "pitch_pos", "pitch_neg"]:
+                self.set_rgb(name, r, g, b)
+        elif self.now - self.pearls_quality_time < 1500:
+            # Beads quality palette: dirty tape, clean tape, vintage, digital.
+            palette = [(2048, 0, 768), (4095, 2304, 0), (0, 4095, 3072), (3072, 3072, 3328)]
+            r, g, b = palette[quality]
+            for name in ["speed_pos", "speed_neg", "pitch_pos", "pitch_neg"]:
+                self.set_rgb(name, r, g, b)
+        elif self.now - self.pearls_scale_time < 1500:
+            # Off (white), chromatic (red), major (amber), minor (yellow),
+            # major pentatonic (green), minor pentatonic (cyan), octaves and
+            # fifths (blue), octaves (magenta), on the Pitch LEDs only.
+            palette = [(3072, 3072, 3328), (4095, 0, 0), (4095, 1500, 0), (3000, 3000, 0),
+                       (0, 4095, 0), (0, 3000, 3000), (0, 0, 4095), (3000, 0, 3000)]
+            r, g, b = palette[scale]
+            for name in ["pitch_pos", "pitch_neg"]:
+                self.set_rgb(name, r, g, b)
+            for name in ["speed_pos", "speed_neg"]:
+                self.set_rgb(name, 0, 0, 0)
 
     def set_rgb(self, name, r, g, b, bright=1.0):
         self.ledDriver.set_rgb(name, r, g, b, bright)       

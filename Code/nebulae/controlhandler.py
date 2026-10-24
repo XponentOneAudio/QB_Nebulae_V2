@@ -146,6 +146,39 @@ class ControlHandler(object):
         #GPIO.setup(self.reset_led_pin, GPIO.OUT)
         self.channeldict["filestate"].setIgnoreGate(True)
         self.channeldict["sourcegate"].setIgnoreHID(True)
+        # Instruments that read gate jacks / drive the EOL jack themselves
+        # (e.g. Pearls) declare it in their config chunk:
+        #   ignoregate,freeze,reset  -> those channels follow their button only
+        #   ignorealtgate,reset,file -> same for their secondary channels
+        #                               (reset_alt, file_alt)
+        #   eol,engine               -> Python leaves the EOL output alone
+        #   ui,pearls                -> status channels for Pearls LED feedback
+        self.eol_from_engine = False
+        self.pearls_quality_comm = None
+        self.pearls_seedled_comm = None
+        self.pearls_frozen_comm = None
+        self.pearls_clock_comm = None
+        self.pearls_io_comm = None
+        self.pearls_scale_comm = None
+        if self.configData is not None:
+            if self.configData.has_key("ignoregate"):
+                for name in self.configData.get("ignoregate"):
+                    if self.channeldict.has_key(name):
+                        self.channeldict[name].setIgnoreGate(True)
+            if self.configData.has_key("ignorealtgate"):
+                for name in self.configData.get("ignorealtgate"):
+                    if self.altchanneldict.has_key(name + "_alt"):
+                        self.altchanneldict[name + "_alt"].setIgnoreGate(True)
+            if self.configData.has_key("eol"):
+                self.eol_from_engine = "engine" in self.configData.get("eol")
+            if self.configData.has_key("ui") and self.csound is not None:
+                if "pearls" in self.configData.get("ui"):
+                    self.pearls_quality_comm = control.CommChannel(self.csound, "pearls_quality")
+                    self.pearls_seedled_comm = control.CommChannel(self.csound, "pearls_seedled")
+                    self.pearls_frozen_comm = control.CommChannel(self.csound, "pearls_frozen")
+                    self.pearls_clock_comm = control.CommChannel(self.csound, "pearls_clock")
+                    self.pearls_io_comm = control.CommChannel(self.csound, "pearls_io")
+                    self.pearls_scale_comm = control.CommChannel(self.csound, "pearls_scale")
         # Worker for writing audio file.
         #self.writeThread = threading.Thread(target=self.writeBufferToAudioFile())
         self.writeThread = threading.Thread(target=self.dummyThread())
@@ -338,6 +371,8 @@ class ControlHandler(object):
         return self.eol_state
 
     def handleEndOfLoop(self):
+        if self.eol_from_engine:
+            return
         self.eol_comm.update()
         self.size_status_comm.update()
         if self.size_status_comm.getState() == 0:

@@ -1,0 +1,101 @@
+nebconfigbegin
+ksmps,64
+-B,512
+-b,128
+sr,48000
+freeze,latching,rising
+reset,momentary,rising
+source,latching,falling
+file,momentary,rising
+record,momentary,rising
+ignoregate,freeze,reset
+ignorealtgate,reset,file
+eol,engine
+ui,pearls
+nebconfigend
+
+; Pearls
+; ======
+; Unofficial, non-commercial port of the Mutable Instruments Beads granular
+; processor (DSP by Emilie Gillet, MIT licence) to the Qu-Bit Nebulae v2.
+;
+; Requires the "pearls" Csound opcode (libpearls.so in the Csound plugin
+; directory), installed by the Pearls firmware update or built on the
+; Nebulae by QB_Nebulae_V2/Code/beads_port/install.sh. See
+; Code/beads_port/README.md.
+;
+; Primary controls                  Beads equivalent
+;   Start          (+CV)            TIME
+;   Size           (+CV)            SIZE (fully clockwise = delay mode)
+;   Window         (+CV)            SHAPE
+;   Density        (+CV)            DENSITY (12 o'clock = no grains)
+;   Pitch encoder  (+1V/oct)        PITCH
+;   Overlap        (+CV)            FEEDBACK
+;   Blend          (+CV)            DRY/WET
+;   Speed encoder  (+CV)            REVERB (clockwise from speed 0)
+;   Freeze button / gate            FREEZE (gate: frozen while high)
+;   Reset button                    SEED (tap = grain; hold 4 s and release
+;                                   = re-lock; Reset + Freeze = re-lock)
+;   Reset gate                      SEED input (clock/trigger grains)
+;   Next button / gate              QUALITY (on release, as Beads): hi-fi ->
+;                                   cold digital -> sunny tape -> scorched
+;                                   cassette (remembered; waits while
+;                                   frozen). Hold 1.5 s: restart the
+;                                   automatic input gain
+;   Source button / gate            wavetable synth mode on/off
+;   Record button                   tap tempo: tap twice or more to clock
+;                                   the grains (or delay) at that tempo;
+;                                   hold 1 s to stop
+;   Hold Next + press Record        pitch quantisation scale: off,
+;                                   chromatic, major, minor, major
+;                                   pentatonic, minor pentatonic, octaves
+;                                   and fifths, octaves (remembered)
+;   EOL output                      grain / delay tap gate
+;
+; Secondary controls (hold Source)
+;   Start / Size / Window / Pitch   TIME / SIZE / SHAPE / PITCH randomness
+;   Density                         input gain: fully CCW = automatic
+;   Overlap                         reversed grains (probability)
+;   Blend                           stereo spread of the grains
+;   Speed                           Nebulae input level (as usual)
+;   Freeze                          randomness flavour: off = smooth
+;                                   variations, on = sparse jumps
+;   Record                          mono buffer (left input, twice as long)
+;   Next                            load the next WAV file from the USB
+;                                   stick into the buffer (frozen, as if
+;                                   Freeze were pressed)
+;   Reset                           save the buffer to the USB stick
+;                                   (pearls_001.wav, pearls_002.wav...)
+;
+; As on Beads, a buffer frozen for 10 seconds is remembered across power
+; cycles (it comes back frozen), and quality, mono and synth mode changes
+; wait while the buffer is frozen. The quality setting is remembered too.
+;
+; Note: don't set "_alt" buttons in the config chunk above (e.g.
+; "freeze_alt,latching,rising"): Nebulae reads "_alt" config lines as default
+; values for secondary controls, and a non-numeric one crashed it (fixed in
+; settings.py since). The default secondary button behaviours are used:
+; Freeze and Record latch, Next counts, Reset triggers.
+
+instr 1
+ainl, ainr inch 1, 2
+
+; Next (gkfilesel) goes to the opcode as is: the button level on the
+; Nebulae (momentary), an incrementing file index in the Qu-Bit Instr Tester.
+
+aL, aR, kgate, kseedled, kreserve, kquality, kfrozen, kclock, kio, kscale pearls ainl, ainr, gkloopstart, gkloopsize, gkwindow, gkdensity, gkpitch, gkspeed, gkoverlap, gkblend, gkloopstart_alt, gkloopsize_alt, gkwindow_alt, gkpitch_alt, gkdensity_alt, gkoverlap_alt, gkblend_alt, gkfreeze, gkreset, gksource, gkfilesel, gkrecord_alt, gkfreeze_alt, gkrecord, gkfile_alt, gkreset_alt, 1, 1
+
+outs aL, aR
+
+; Status for the Nebulae user interface.
+chnset kquality, "pearls_quality"
+chnset kseedled, "pearls_seedled"
+chnset kreserve, "pearls_reserve"
+chnset kfrozen, "pearls_frozen"
+chnset kclock, "pearls_clock"
+chnset kio, "pearls_io"
+chnset kscale, "pearls_scale"
+gkeol = kgate
+gksizestatus = 0
+gkrecordstatus = 0
+endin
